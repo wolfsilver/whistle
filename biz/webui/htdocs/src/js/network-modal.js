@@ -1,20 +1,27 @@
 var util = require('./util');
 var storage = require('./storage');
+var events = require('./events');
 
 var NUM_OPTIONS = [500, 1000, 1500, 2000, 2500, 3000];
 var curLength = parseInt(storage.get('maxNetworkRows'), 10) || 1500;
 var MAX_LENGTH = NUM_OPTIONS.indexOf(curLength) === -1 ? 1500 : curLength;
 var MAX_COUNT = MAX_LENGTH + 100;
-var WIN_NAME_PRE = '__whistle_' + location.href.replace(/\/[^/]*([#?].*)?$/, '/') + '__';
+var dataCenter;
+var WIN_NAME_PRE =
+  '__whistle_' + location.href.replace(/\/[^/]*([#?].*)?$/, '/') + '__';
+var KW_RE =
+  /^(e|error|style|url|u|content|c|b|body|headers|h|ip|i|status|result|s|r|method|m|mark|type|t):(.*)$/i;
+var KW_LIST_RE = /([^\s]+)(?:\s+([^\s]+)(?:\s+([\S\s]+))?)?/;
 
 function NetworkModal(list) {
-  this._list = updateOrder(list);
-  this.list = list.slice(0, MAX_LENGTH);
+  this.list = updateOrder(list);
+  this.isTreeView = storage.get('isTreeView') === '1';
+  this.clearRoot();
 }
 
 NetworkModal.MAX_COUNT = MAX_COUNT;
 
-NetworkModal.setMaxRows = function(num) {
+NetworkModal.setMaxRows = function (num) {
   num = parseInt(num, 10);
   if (NUM_OPTIONS.indexOf(num) !== -1) {
     MAX_LENGTH = num;
@@ -24,7 +31,7 @@ NetworkModal.setMaxRows = function(num) {
   }
 };
 
-NetworkModal.getMaxRows = function() {
+NetworkModal.getMaxRows = function () {
   return MAX_LENGTH;
 };
 
@@ -39,133 +46,254 @@ var proto = NetworkModal.prototype;
  * status[result]: 根据status过滤
  * method[m]: 根据method过滤
  */
-proto.search = function(keyword) {
-  this._type = 'url';
-  this._keyword = typeof keyword != 'string' ? '' : keyword.trim();
-  if (this._keyword && /^(url|u|content|c|b|body|headers|h|ip|i|status|result|s|r|method|m|type|t):(.*)$/.test(keyword)) {
-    this._type = RegExp.$1;
-    this._keyword = RegExp.$2.trim();
+
+function parseKeyword(keyword) {
+  keyword = typeof keyword != 'string' ? '' : keyword.trim();
+  if (!keyword) {
+    return;
   }
-  if (this._not = this._keyword[0] === '!') {
-    this._keyword = this._keyword.substring(1);
+  var not = keyword[0] === '!';
+  if (not) {
+    keyword = keyword.substring(1);
   }
-  this._keywordRE = util.toRegExp(this._keyword);
-  this._keyword = this._keyword.toLowerCase();
+  var type = 'url';
+  if (KW_RE.test(keyword)) {
+    type = RegExp.$1.toLowerCase();
+    keyword = RegExp.$2.trim();
+    if (keyword[0] === '!') {
+      not = true;
+      keyword = keyword.substring(1);
+    }
+  }
+  if (!keyword && !type) {
+    return;
+  }
+  return {
+    not: not,
+    type: type,
+    keyword: keyword.toLowerCase(),
+    regexp: util.toRegExp(keyword)
+  };
+}
+
+function parseKeywordList(keyword) {
+  keyword = typeof keyword != 'string' ? '' : keyword.trim();
+  if (!keyword) {
+    return;
+  }
+  var result;
+  var addKw = function (kw) {
+    if (kw) {
+      result = result || [];
+      result.push(kw);
+    }
+  };
+  if (KW_LIST_RE.test(keyword)) {
+    var k1 = RegExp.$1;
+    var k2 = RegExp.$2;
+    var k3 = RegExp.$3;
+    addKw(parseKeyword(k1));
+    addKw(parseKeyword(k2));
+    addKw(parseKeyword(k3));
+  } else {
+    addKw(parseKeyword(keyword));
+  }
+  return result;
+}
+
+proto.search = function (keyword) {
+  this._keyword = parseKeywordList(keyword);
   this.filter();
-  if (!this._keyword) {
-    var overflow = this._list.length - MAX_COUNT;
-    overflow > 0 && this._list.splice(0, overflow);
-  }
   return keyword;
 };
 
-proto.checkKeywork = function(str) {
+function checkKeywork(str, opts) {
   if (!str) {
     return false;
   }
-  if (!this._keyword) {
+  if (!opts.keyword) {
     return true;
   }
-  return this._keywordRE ? this._keywordRE.test(str) : str.toLowerCase().indexOf(this._keyword) !== -1;
-};
+  return opts.regexp
+    ? opts.regexp.test(str)
+    : str.toLowerCase().indexOf(opts.keyword) !== -1;
+}
 
-proto.hasKeyword = function() {
-  return !!this._keyword;
-};
+function checkUrl(item, opts) {
+  if (checkKeywork((item.isHttps ? 'tunnel://' : '') + item.url, opts)) {
+    return true;
+  }
+  var rawUrl = util.getRawUrl(item);
+  return checkKeywork(rawUrl, opts);
+}
 
-proto.setSortColumns = function(columns) {
-  this._columns = columns;
-  this.filter();
-};
-proto.checkNot = function(flag) {
-  return this._not ? !flag : flag;
-};
-proto.filter = function(newList) {
-  var self = this;
-  var keyword = self._keyword;
-  var list = self.list;
-  if (!keyword) {
-    list.forEach(function(item) {
-      item.hide = false;
-    });
-  } else {
-    switch(self._type) {
-    case 'c':
-    case 'content':
-    case 'b':
-    case 'body':
-      list.forEach(function(item) {
-        var reqBody = util.getBody(item.req, true);
-        var resBody = util.getBody(item.res);
-        item.hide = self.checkNot(!self.checkKeywork(reqBody) && !self.checkKeywork(resBody));
-      });
-      break;
-    case 'headers':
-    case 'h':
-      list.forEach(function(item) {
-        item.hide = self.checkNot(!self.inObject(item.req.headers, keyword)
-                && !self.inObject(item.res.headers, keyword));
-      });
-      break;
-    case 'type':
-    case 't':
-      list.forEach(function(item) {
-        var type = item.res.headers;
-        type = type && type['content-type'];
-        item.hide = self.checkNot(!(typeof type == 'string' && self.checkKeywork(type)));
-      });
-      break;
-    case 'ip':
-    case 'i':
-      list.forEach(function(item) {
-        item.hide = self.checkNot(!self.checkKeywork(item.req.ip) && !self.checkKeywork(item.res.ip));
-      });
-      break;
-    case 'status':
-    case 's':
-    case 'result':
-    case 'r':
-      list.forEach(function(item) {
-        var status = item.res.statusCode;
-        item.hide = self.checkNot(!self.checkKeywork(status == null ? '-' : String(status)));
-      });
-      break;
-    case 'method':
-    case 'm':
-      list.forEach(function(item) {
-        item.hide = self.checkNot(!self.checkKeywork(item.req.method));
-      });
-      break;
-    default:
-      list.forEach(function(item) {
-        item.hide = self.checkNot(!self.checkKeywork(item.url.toLowerCase()));
-      });
+function checkData(item, opts) {
+  if (setNot(checkUrl(item, opts), opts.not)) {
+    return false;
+  }
+  var keys = dataCenter && dataCenter.getDataKeys();
+  var len = keys && keys.length;
+  if (len) {
+    for (var i = 0; i < len; i++) {
+      var value = util.getProperty(item, keys[i]);
+      if (value != null && setNot(checkKeywork(String(value), opts), opts.not)) {
+        return false;
+      }
     }
   }
+  return true;
+}
+
+proto.hasKeyword = function () {
+  return this._keyword;
+};
+
+proto.setSortColumns = function (columns) {
+  this._columns = columns;
+  this.filter(false);
+};
+
+function setNot(flag, not) {
+  return not ? !flag : flag;
+}
+
+function checkItem(item, opts) {
+  switch (opts.type) {
+  case 'mark':
+    return !item.mark || checkData(item, opts);
+  case 'c':
+  case 'content':
+  case 'b':
+  case 'body':
+    var reqBody = util.getBody(item.req, true);
+    var resBody = util.getBody(item.res);
+    return setNot(
+        !checkKeywork(reqBody, opts) && !checkKeywork(resBody, opts),
+        opts.not
+      );
+  case 'headers':
+  case 'h':
+    return setNot(
+        !inObject(item.req.headers, opts) && !inObject(item.res.headers, opts),
+        opts.not
+      );
+  case 'type':
+  case 't':
+    var type = item.res.headers;
+    type = type && type['content-type'];
+    return setNot(
+        !(typeof type == 'string' && checkKeywork(type, opts)),
+        opts.not
+      );
+  case 'ip':
+  case 'i':
+    return setNot(
+        !checkKeywork(item.req.ip, opts) && !checkKeywork(item.res.ip, opts),
+        opts.not
+      );
+  case 'status':
+  case 's':
+  case 'result':
+  case 'r':
+    var status = item.res.statusCode;
+    return setNot(
+        !checkKeywork(status == null ? '-' : String(status), opts),
+        opts.not
+      );
+  case 'method':
+  case 'm':
+    return setNot(!checkKeywork(item.req.method, opts), opts.not);
+  case 'e':
+  case 'error':
+    var statusCode = item.res && item.res.statusCode;
+    var isError = item.reqError || item.resError || (item.customData && item.customData.error) ||
+    (statusCode && (!/^\d+$/.test(statusCode) || statusCode >= 400));
+    return !isError || checkData(item, opts);
+  case 'style':
+    return !item.style ||  checkData(item, opts);
+  default:
+    return checkData(item, opts);
+  }
+}
+
+proto.hasUnmarked = function () {
+  var list = this.list;
+  for (var i = list.length - 1; i >= 0; --i) {
+    if (!list[i].mark) {
+      return true;
+    }
+  }
+};
+
+proto.getList = function () {
+  return this._list || this.list;
+};
+
+proto.getTreeLeafs = function(treeId) {
+  if (!treeId) {
+    return;
+  }
+  var isTunnel = !treeId.indexOf('tunnel://');
+  if (isTunnel) {
+    treeId = treeId.substring(9);
+  } else {
+    treeId += '/';
+  }
+  var result = this.list.filter(function (item) {
+    return isTunnel ? item.url === treeId : !item.url.indexOf(treeId);
+  });
+  return result.length ? result : undefined;
+};
+
+function toStr(val) {
+  if (val == null) {
+    return '';
+  }
+  return val + '';
+}
+
+proto.filter = function () {
+  var self = this;
+  var list = self.list;
+  var keyword = self._keyword;
+  list.forEach(function (item) {
+    if (keyword) {
+      item.hide =
+        checkItem(item, keyword[0]) ||
+        (keyword[1] && checkItem(item, keyword[1])) ||
+        (keyword[2] && checkItem(item, keyword[2]));
+    } else {
+      item.hide = false;
+    }
+  });
 
   var columns = self._columns;
   if (columns && columns.length) {
     var len = columns.length;
-    self.list.sort(function(prev, next) {
+    self._list = self.list.slice().sort(function (prev, next) {
       for (var i = 0; i < len; i++) {
         var column = columns[i];
-        var prevVal = prev[column.name];
-        var nextVal = next[column.name];
+        var prevVal = util.getCellValue(prev, column);
+        var nextVal = util.getCellValue(next, column);
+        if (column.key) {
+          prevVal = toStr(prevVal);
+          nextVal = toStr(nextVal);
+        }
         var result = compare(prevVal, nextVal, column.order, column.name);
         if (result) {
           return result;
         }
       }
 
-      return prev.order > next.order ? 1 : -1;
+      return prev.order > next.order ? -1 : 1;
     });
-  } else if (!newList) {
-    self.list = self._list.slice(0, MAX_LENGTH);
+  } else {
+    self._list = null;
   }
+  this.updateTree();
   this.updateDisplayCount();
   return list;
 };
-
 
 function compare(prev, next, order, name) {
   if (prev == next) {
@@ -177,7 +305,9 @@ function compare(prev, next, order, name) {
   if (next == '-') {
     return -1;
   }
-  return order == 'asc' ? -_compare(prev, next, name) : _compare(prev, next, name);
+  return order == 'asc'
+    ? _compare(prev, next, name)
+    : -_compare(prev, next, name);
 }
 
 function _compare(prev, next, name) {
@@ -204,27 +334,26 @@ function _compare(prev, next, name) {
   return -1;
 }
 
-proto.inObject = function(obj) {
+function inObject(obj, opts) {
   for (var i in obj) {
-    if (this.checkKeywork(i)) {
+    if (checkKeywork(i, opts)) {
       return true;
     }
     var value = obj[i];
-    if (typeof value == 'string'
-        && this.checkKeywork(value)) {
+    if (typeof value == 'string' && checkKeywork(value, opts)) {
       return true;
     }
   }
 
   return false;
-};
+}
 
 var MAX_FS_COUNT = 60;
 
-proto.updateDisplayCount = function() {
-  window.name = WIN_NAME_PRE + this._list.length;
+proto.updateDisplayCount = function () {
+  window.name = WIN_NAME_PRE + this.list.length;
 };
-proto.getDisplayCount = function() {
+proto.getDisplayCount = function () {
   var winName = window.name;
   if (typeof winName !== 'string' || winName.indexOf(WIN_NAME_PRE) !== 0) {
     return 0;
@@ -233,16 +362,21 @@ proto.getDisplayCount = function() {
   return count >= 0 && count <= MAX_FS_COUNT ? count : MAX_FS_COUNT;
 };
 
-proto.clear = function clear() {
+proto.clear = function () {
+  var len = this.list.length;
   this.clearNetwork = true;
-  this._list.splice(0, this._list.length);
-  this.list = [];
+  this.list.splice(0, len);
+  this._list = null;
+  this.updateTree();
   this.updateDisplayCount();
+  if (len) {
+    events.trigger('selectedSessionChange');
+  }
   return this;
 };
 
-proto.removeByHostList = function(hostList) {
-  var list = this._list;
+proto.removeByHostList = function (hostList) {
+  var list = this.list;
   for (var i = list.length - 1; i >= 0; --i) {
     var item = list[i];
     if (hostList.indexOf(item.isHttps ? item.path : item.hostname) !== -1) {
@@ -253,10 +387,42 @@ proto.removeByHostList = function(hostList) {
   this.updateDisplayCount();
 };
 
-proto.removeByUrlList = function(urlList) {
-  var list = this._list;
+function getNodeIdMap(node, map) {
+  var children = node.children;
+  if (!children) {
+    map[node.data.id] = 1;
+    return map;
+  }
+  children.forEach(function (child) {
+    getNodeIdMap(child, map);
+  });
+  return map;
+}
+
+proto.removeTreeNode = function (path, others) {
+  var node = this.getTreeNode(path);
+  if (!node) {
+    return;
+  }
+  var map = getNodeIdMap(node, {});
+  var list = this.list;
   for (var i = list.length - 1; i >= 0; --i) {
-    if (urlList.indexOf(list[i].url.replace(/\?.*$/, '').substring(0, 1024)) !== -1) {
+    if (others ? !map[list[i].id] : map[list[i].id]) {
+      list.splice(i, 1);
+    }
+  }
+  this.update();
+  this.updateDisplayCount();
+  return true;
+};
+
+proto.removeByUrlList = function (urlList) {
+  var list = this.list;
+  for (var i = list.length - 1; i >= 0; --i) {
+    if (
+      urlList.indexOf(list[i].url.replace(/\?.*$/, '').substring(0, 1024)) !==
+      -1
+    ) {
       list.splice(i, 1);
     }
   }
@@ -264,10 +430,10 @@ proto.removeByUrlList = function(urlList) {
   this.updateDisplayCount();
 };
 
-proto.removeSelectedItems = function() {
+proto.removeSelectedItems = function () {
   var hasSelectedItem;
   var endIndex = -1;
-  var list = this._list;
+  var list = this.list;
 
   for (var i = list.length - 1; i >= 0; i--) {
     var item = list[i];
@@ -291,17 +457,17 @@ proto.removeSelectedItems = function() {
   }
 };
 
-proto.remove = function(item) {
-  var list = this._list;
+proto.remove = function (item) {
+  var list = this.list;
   var index = list.indexOf(item);
   if (index !== -1) {
-    list.splice(index ,1);
+    list.splice(index, 1);
     this.update(false, true);
   }
 };
 
-proto.removeOthers = function(item) {
-  var list = this._list;
+proto.removeOthers = function (item) {
+  var list = this.list;
   var index = list.indexOf(item);
   if (index !== -1) {
     list.splice(index + 1, list.length - index);
@@ -312,10 +478,10 @@ proto.removeOthers = function(item) {
   }
 };
 
-proto.removeUnselectedItems = function() {
+proto.removeUnselectedItems = function () {
   var hasUnselectedItem;
   var endIndex = -1;
-  var list = this._list;
+  var list = this.list;
 
   for (var i = list.length - 1; i >= 0; i--) {
     var item = list[i];
@@ -339,8 +505,35 @@ proto.removeUnselectedItems = function() {
   }
 };
 
-proto.prev = function() {
+proto.removeUnmarkedItems = function () {
+  var hasUnmarkedItem;
+  var endIndex = -1;
   var list = this.list;
+
+  for (var i = list.length - 1; i >= 0; i--) {
+    var item = list[i];
+    if (!item.mark) {
+      hasUnmarkedItem = true;
+      if (endIndex == -1) {
+        endIndex = i;
+      }
+      if (!i) {
+        list.splice(i, endIndex - i + 1);
+      }
+    } else if (endIndex != -1) {
+      list.splice(i + 1, endIndex - i);
+      endIndex = -1;
+    }
+  }
+
+  if (hasUnmarkedItem) {
+    this.update(false, true);
+    return true;
+  }
+};
+
+proto.prev = function () {
+  var list = this.getList();
   var len = list.length;
   if (!len) {
     return;
@@ -363,8 +556,8 @@ proto.prev = function() {
   }
 };
 
-proto.next = function() {
-  var list = this.list;
+proto.next = function () {
+  var list = this.getList();
   var len = list.length;
   if (!len) {
     return;
@@ -387,17 +580,15 @@ proto.next = function() {
   }
 };
 
-
-
-function updateList(list, len, keyword) {
+function updateList(list, len, hasKeyword) {
   if (!(len > 0)) {
     return;
   }
   var activeItem = getActive(list);
-  if (keyword) {
+  if (hasKeyword) {
     var i = 0;
     var length = list.length;
-    while(len > 0 && i < length) {
+    while (len > 0 && i < length) {
       if (list[i].hide) {
         --length;
         --len;
@@ -414,19 +605,17 @@ function updateList(list, len, keyword) {
   }
 }
 
-proto.update = function(scrollAtBottom, force) {
-  updateOrder(this._list, force);
-  if (scrollAtBottom) {
-    var exceed = Math.min(this._list.length - MAX_LENGTH, 100);
-    updateList(this._list, exceed, this._keyword);
+proto.update = function (scrollAtBottom, force) {
+  updateOrder(this.list, force);
+  if (scrollAtBottom && !this.isTreeView) {
+    var exceed = Math.min(this.list.length - MAX_LENGTH, 100);
+    updateList(this.list, exceed, this.hasKeyword());
   }
-
-  this.list = this._list.slice(0, MAX_LENGTH);
-  this.filter(true);
-  return this._list.length > MAX_LENGTH;
+  this.filter();
+  return !this.isTreeView && this.list.length > MAX_LENGTH;
 };
 
-proto.hasSelected = function() {
+proto.hasSelected = function () {
   var list = this.list;
   for (var i = 0, len = list.length; i < len; i++) {
     var item = list[i];
@@ -437,7 +626,7 @@ proto.hasSelected = function() {
   return false;
 };
 
-proto.hasUnselected = function() {
+proto.hasUnselected = function () {
   var list = this.list;
   for (var i = 0, len = list.length; i < len; i++) {
     var item = list[i];
@@ -448,8 +637,7 @@ proto.hasUnselected = function() {
   return false;
 };
 
-proto.getSelected = function() {
-
+proto.getSelected = function () {
   return this.getActive();
 };
 
@@ -462,11 +650,11 @@ function getActive(list) {
   }
 }
 
-proto.getActive = function() {
+proto.getActive = function () {
   return getActive(this.list) || this.getSelectedList()[0];
 };
 
-proto.getItem = function(id) {
+proto.getItem = function (id) {
   if (!id) {
     return;
   }
@@ -479,13 +667,12 @@ proto.getItem = function(id) {
   }
 };
 
-proto.setSelected = function(item, selected) {
+proto.setSelected = function (item, selected) {
   item.selected = selected !== false;
 };
 
-proto.getSelectedList = function() {
-
-  return this.list.filter(function(item) {
+proto.getSelectedList = function () {
+  return this.list.filter(function (item) {
     return !item.hide && item.selected;
   });
 };
@@ -503,6 +690,9 @@ function getPrevSelected(start, list) {
 function getNextSelected(start, list) {
   for (var len = list.length; start < len; start++) {
     var item = list[start + 1];
+    if (item && item.data) {
+      item = item.data;
+    }
     if (!item || (!item.selected && !item.active)) {
       return start;
     }
@@ -510,8 +700,13 @@ function getNextSelected(start, list) {
   return start;
 }
 
-proto.setSelectedList = function(start, end, selectElem) {
-  var list = this.list;
+proto.setSelectedList = function (start, end, selectElem) {
+  var list = this.getList();
+  if (this.isTreeView) {
+    list = this.root.list;
+    start = this.getTreeNode(start.id);
+    end = this.getTreeNode(end.id);
+  }
   start = list.indexOf(start);
   end = list.indexOf(end);
   if (start > end) {
@@ -523,6 +718,7 @@ proto.setSelectedList = function(start, end, selectElem) {
   }
   for (var i = 0, len = list.length; i < len; i++) {
     var item = list[i];
+    item = item.data || item;
     if (i >= start && i <= end) {
       item.selected = true;
       selectElem(item, true);
@@ -532,23 +728,187 @@ proto.setSelectedList = function(start, end, selectElem) {
   }
 };
 
-proto.clearSelection = function() {
-  this.list.forEach(function(item) {
+proto.clearSelection = function () {
+  this.list.forEach(function (item) {
     item.selected = false;
   });
 };
 
-proto.clearActive = function() {
-  this.list.forEach(function(item) {
+proto.clearActive = function () {
+  this.list.forEach(function (item) {
     item.active = false;
   });
+};
+
+function parsePaths(url) {
+  var index = url.indexOf('?');
+  var search = '';
+  if (index !== -1) {
+    search = url.substring(index);
+    url = url.substring(0, index);
+  }
+  index = url.indexOf('://');
+  if (index === -1) {
+    return ['tunnel://' + url, '/'];
+  }
+  index = url.indexOf('/', index + 3);
+  if (index === -1) {
+    return [url, '/'];
+  }
+  var paths = url.substring(index).split('/');
+  paths[0] = url.substring(0, index);
+  var lastIndex = paths.length - 1;
+  paths[lastIndex] = '/' + paths[lastIndex] + search;
+  return paths;
+}
+
+function checkHide(item) {
+  var children = item.children;
+  if (!children || item.hide) {
+    return item.hide;
+  }
+  var hide = true;
+  for (var i = 0, len = children.length; i < len; i++) {
+    var child = children[i];
+    if (checkHide(child)) {
+      child.hide = true;
+    } else {
+      hide = false;
+      child.hide = false;
+    }
+  }
+  item.hide = hide;
+  return hide;
+}
+
+function handleTree(root, list) {
+  var children = root.children;
+  for (var i = 0, len = children.length; i < len; i++) {
+    var item = children[i];
+    if (!item.hide) {
+      list.push(item);
+      item.children && handleTree(item, list);
+    }
+  }
+  return root;
+}
+
+proto.clearRoot = function () {
+  var root = {
+    children: [],
+    map: {},
+    list: []
+  };
+  this.root = root;
+  return root;
+};
+
+proto.getListByPath = function (path) {
+  var isTunnel = path.indexOf('tunnel://') === 0;
+  if (isTunnel) {
+    path = path.substring(9);
+  } else {
+    path = path + '/';
+  }
+  return this.list.filter(function (item) {
+    return (
+      !item.hide && (isTunnel ? item.url === path : !item.url.indexOf(path))
+    );
+  });
+};
+
+proto.updateTree = function () {
+  if (!this.isTreeView) {
+    this._updateOnTreeView = true; // 非树状展示模式，不更新 tree 数据，等切换 view 时更新
+    return this.root;
+  }
+  this._updateOnTreeView = false;
+  var allData = this.list;
+  var len = allData.length;
+  if (!len) {
+    return this.clearRoot();
+  }
+  var oldRoot = this.root;
+  var root = this.clearRoot();
+  for (var i = 0; i < len; i++) {
+    var item = allData[i];
+    var paths = parsePaths(item.url);
+    var lastIndex = paths.length - 1;
+    var parent = root;
+    var pre = oldRoot;
+    var path;
+    var top;
+    for (var j = 0; j < lastIndex; j++) {
+      var value = paths[j];
+      var next = parent.map[value];
+      var old = pre && pre.map[value];
+      path = j ? path + '/' + value : value;
+      if (!next) {
+        next = {
+          depth: j,
+          path: path,
+          value: value,
+          children: [],
+          map: {}
+        };
+        if (old) {
+          next.expand = old.expand;
+          next.pExpand = old.pExpand;
+        }
+        parent.map[value] = next;
+        parent.children.push(next);
+      }
+      if (j) {
+        next.parent = parent;
+      } else {
+        top = next;
+      }
+      parent = next;
+      pre = old;
+    }
+    var leaf = {
+      depth: lastIndex,
+      parent: parent,
+      value: paths[lastIndex],
+      hide: item.hide,
+      data: item
+    };
+    top.map[item.id] = leaf;
+    parent.children.push(leaf);
+  }
+  root.children.forEach(checkHide);
+  handleTree(root, root.list);
+  return root;
+};
+
+proto.setTreeView = function (isTreeView, quiet) {
+  isTreeView = isTreeView !== false;
+  if (this.isTreeView !== isTreeView) {
+    this.isTreeView = isTreeView;
+    !quiet && storage.set('isTreeView', isTreeView ? '1' : '');
+    isTreeView && this._updateOnTreeView && this.updateTree();
+  }
+};
+
+proto.getTree = function () {
+  return this.root;
+};
+
+proto.getTreeNode = function (id) {
+  var list = this.root.list;
+  for (var i = 0, len = list.length; i < len; i++) {
+    var item = list[i];
+    if (item.data ? item.data.id === id : item.path === id) {
+      return item;
+    }
+  }
 };
 
 function updateOrder(list, force) {
   var len = list.length;
   if (len && (force || !list[len - 1].order)) {
     var order = list[0].order || 1;
-    list.forEach(function(item, i) {
+    list.forEach(function (item, i) {
       item.order = order + i;
     });
   }
@@ -556,5 +916,8 @@ function updateOrder(list, force) {
   return list;
 }
 
-module.exports = NetworkModal;
+NetworkModal.setDataCenter = function(dc) {
+  dataCenter = dc;
+};
 
+module.exports = NetworkModal;

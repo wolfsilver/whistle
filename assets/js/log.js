@@ -238,7 +238,7 @@
       }
     }
     img.src ='$LOG_CGI?id=$LOG_ID&level=' + level + '&text=' + logStr
-      + '&' + new Date().getTime() + '-' + ++index;
+      + '&t=' + new Date().getTime() + '&' + ++index;
     var preventGC = function() {
       img.onload = img.onerror = null;
       clearTimeout(timer);
@@ -279,6 +279,9 @@
   }
 
   function stringifyObj(obj) {
+    if (typeof obj === 'string') {
+      return obj;
+    }
     try {
       return JSON.stringify(obj);
     } catch(e) {}
@@ -327,26 +330,28 @@
         result = stringifyObj(result);
         result && addLog(level, result);
       };
-      console[level] = function() {
-        if (pending) {
-          return;
-        }
-        pending = true;
-        var weinreFn = console['_weinre_' + level];
-        if (typeof weinreFn === 'function') {
+      if ($INTERCEPT_CONSOLE) {
+        console[level] = function() {
+          if (pending) {
+            return;
+          }
+          pending = true;
+          var weinreFn = console['_weinre_' + level];
+          if (typeof weinreFn === 'function') {
+            try {
+              weinreFn.apply(this, arguments);
+            } catch (e) {}
+          }
+          wFn.apply(null, arguments);
           try {
-            weinreFn.apply(this, arguments);
-          } catch (e) {}
-        }
-        wFn.apply(null, arguments);
-        try {
-          fn.apply(this, arguments);
-        } catch(e) {
-          fn(arguments.length < 2 ? arguments[0] : slice.apply(arguments));
-        } finally {
-          pending = false;
-        }
-      };
+            fn.apply(this, arguments);
+          } catch(e) {
+            fn(arguments.length < 2 ? arguments[0] : slice.apply(arguments));
+          } finally {
+            pending = false;
+          }
+        };
+      }
     })(levels[i]);
   }
   /*eslint no-console: "off"*/
@@ -371,7 +376,7 @@
     var curConsole = window.console;
     if (!curConsole) {
       window.console = console;
-    } else if (isWeinreConsole(curConsole)) {
+    } else if ($INTERCEPT_CONSOLE && isWeinreConsole(curConsole)) {
       for (var i = 0, len = levels.length; i < len; i++) {
         var level = levels[i];
         var fn = console[level];
@@ -385,4 +390,15 @@
     setTimeout(attachOnError, 600);
   };
   attachOnError();
+
+  if (typeof  window.addEventListener === 'function') {
+    window.addEventListener('unhandledrejection', function(e) {
+      var reason = 'UnhandledRejection';
+      if (e) {
+         e = stringifyObj(e.reason || e) || String(e);
+         reason += (/^[\w.-]*:/.test(e) ? ' ' : ': ') + e;
+      }
+      wConsole.error(reason);
+    });
+  }
 })();

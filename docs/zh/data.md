@@ -50,9 +50,9 @@ whistle的操作值可以分两类，字符串和JSON对象。
 			key1=value1&key2=value2&keyN=valueN
 
 
-注意：最后一种内联格式可以把JSON对象直接转化为字符串，这样可以用第一种方式直接写到配置里面，如果key或value里面出现 `空格`、`&`、`%` 或 `=`，则需要把它们 `encodeURIComponent`，whistle会对每个key和value尝试 `decodeURIComponent`。
+注意：新版 Whistle 的内联规则解析成对象将会保留配置的值，不再自动 encodeURIComponent。
 
-#### 内联多行操作值
+#### 内嵌多行操作值
 在[v1.12.12](./update.html)之前的版本，操作值有三种存储方式：
 
 1. 内联到规则里面(`pattern protocol://(value)`)，`value` 不能有空格
@@ -77,7 +77,7 @@ reqScript,
 ```
 ````
 `````
-这种内联值位置可以在Rules里面任意放置，格式如下：
+这种内嵌值位置可以在Rules里面任意放置，格式如下：
 ````
 ``` keyName
 content
@@ -114,13 +114,15 @@ test.json:
 	"url": "${url}",
 	"port": "${port}",
 	"version": "${version}",
-	"search": "${url.search}",
-	"query": "${url.query}",
-	"queryValue": "${url.query.name}",
-	"host": "${url.host}",
-	"hostname": "${url.hostname}",
-	"path": "${url.path}",
-	"pathname": "${url.pathname}",
+	"query": "${query}", // 相当于 location.search ，如果 url 里面没有 ? 则为空字符串
+	"search": "${search}", // 相当于 location.search ，如果 url 里面没有 ? 则为空字符串
+	"queryString": "${queryString}",  // 相当于 location.search ，但如果 url 里面没有 ? 则为 ?
+	"searchString": "${searchString}",  // 相当于 location.search ，但如果 url 里面没有 ? 则为 ?
+	"queryValue": "${query.name}",
+	"host": "${host}",
+	"hostname": "${hostname}",
+	"path": "${path}",
+	"pathname": "${pathname}",
 	"reqId": "${reqId}",
 	"now": ${now},
 	"method": "${method}",
@@ -131,6 +133,7 @@ test.json:
 	"clientIp": "${clientIp}"
 }
 ```
+
 这里 `test.json` 在规则中一定要用模板字符串引入：
 ```
  protocol://`{test.json}`
@@ -183,4 +186,20 @@ test2.json:
 ```
 protocol://`${search.replace(/course=([^&]+)/ig,name=$1)}`
 protocol://`${search.replace(a,b)}`
+```
+
+
+`${query}` 和 `${queryString}` 的用途，如配置[redirect](rules/redirect.html) 重定向：
+``` txt
+# 不需要追加参数
+www.test.com/index.html redirect://`https://ke.qq.com/test${query}`
+
+# 需要追加参数
+www.test.com/index.html redirect://`https://ke.qq.com/test${queryString}&test=1`
+
+# 追加参数
+www.test.com redirect://`https://ke.qq.com${url.path}`
+
+# 修改为 301
+www.test.com redirect://`https://ke.qq.com${url.path}` replaceStatus://301
 ```

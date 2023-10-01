@@ -2,18 +2,25 @@ var express = require('express');
 var app = express();
 var path = require('path');
 var url = require('url');
-var getAuth = require('basic-auth');
+var http = require('http');
+var https = require('https');
 var parseurl = require('parseurl');
 var bodyParser = require('body-parser');
 var crypto = require('crypto');
 var cookie = require('cookie');
 var fs = require('fs');
 var zlib = require('zlib');
+var extend = require('extend');
 var htdocs = require('../htdocs');
 var handleWeinreReq = require('../../weinre');
 var setProxy = require('./proxy');
+var rulesUtil = require('../../../lib/rules/util');
 var getRootCAFile = require('../../../lib/https/ca').getRootCAFile;
 var config = require('../../../lib/config');
+var sendError = require('../cgi-bin/util').sendError;
+var parseAuth = require('../../../lib/util/common').parseAuth;
+var getWorker = require('../../../lib/plugins/util').getWorker;
+var loadAuthPlugins = require('../../../lib/plugins').loadAuthPlugins;
 
 var PARSE_CONF = { extended: true, limit: '3mb'};
 var UPLOAD_PARSE_CONF = { extended: true, limit: '30mb'};
@@ -24,17 +31,23 @@ var uploadJsonParser = bodyParser.json(UPLOAD_PARSE_CONF);
 var GET_METHOD_RE = /^get$/i;
 var WEINRE_RE = /^\/weinre\/.*/;
 var ALLOW_PLUGIN_PATHS = ['/cgi-bin/rules/list2', '/cgi-bin/values/list2', '/cgi-bin/get-custom-certs-info'];
-var DONT_CHECK_PATHS = ['/cgi-bin/server-info', '/cgi-bin/show-host-ip-in-res-headers', '/cgi-bin/plugins/is-enable',
-                        '/cgi-bin/composer', '/cgi-bin/socket/data', '/preview.html',
-                        '/cgi-bin/socket/abort', '/cgi-bin/socket/change-status',
-                        '/cgi-bin/sessions/export', '/cgi-bin/sessions/import', '/cgi-bin/plugins/update-rules',
-                        '/cgi-bin/lookup-tunnel-dns', '/cgi-bin/rootca', '/cgi-bin/log/set'];
+var SPECIAL_PATHS = ['/cgi-bin/rules/project'];
+var DONT_CHECK_PATHS = ['/cgi-bin/server-info', '/cgi-bin/plugins/is-enable', '/cgi-bin/plugins/get-plugins',
+  '/preview.html', '/cgi-bin/rootca', '/cgi-bin/log/set', '/cgi-bin/status'];
+var GUEST_PATHS = ['/cgi-bin/composer', '/cgi-bin/socket/data', '/cgi-bin/abort', '/cgi-bin/socket/abort',
+  '/cgi-bin/socket/change-status', '/cgi-bin/sessions/export'];
 var PLUGIN_PATH_RE = /^\/(whistle|plugin)\.([^/?#]+)(\/)?/;
 var STATIC_SRC_RE = /\.(?:ico|js|css|png)$/i;
+var UPLOAD_URLS = ['/cgi-bin/values/upload', '/cgi-bin/composer'];
 var proxyEvent, util, pluginMgr;
 var MAX_AGE = 60 * 60 * 24 * 3;
 var MENU_HTML = fs.readFileSync(path.join(__dirname, '../../../assets/menu.html'));
-var MENU_URL = '???_WHISTLE_PLUGIN_EXT_CONTEXT_MENU_???';
+var INSPECTOR_HTML = fs.readFileSync(path.join(__dirname, '../../../assets/tab.html'));
+var MENU_URL = '???_WHISTLE_PLUGIN_EXT_CONTEXT_MENU_' + config.port + '???';
+var INSPECTOR_URL = '???_WHISTLE_PLUGIN_INSPECTOR_TAB_' + config.port + '???';
+var UP_PATH_REGEXP = /(?:^|[\\/])\.\.(?:[\\/]|$)/;
+var KEY_RE_G = /\${[^{}\s]+}|{\S+}/g;
+var COMMENT_RE = /#[^\r\n]*$/mg;
 
 function doNotCheckLogin(req) {
   var path = req.path;
@@ -64,10 +77,20 @@ function getLoginKey (req, res, auth) {
   return shasum([auth.username, password, ip].join('\n'));
 }
 
-function requireLogin(res) {
+function requireLogin(req, res, msg) {
+  if (config.client) {
+    if (config.handleWebReq) {
+      return config.handleWebReq(req, res);
+    }
+    return res.status(404).end();
+  }
   res.setHeader('WWW-Authenticate', ' Basic realm=User Login');
   res.setHeader('Content-Type', 'text/html; charset=utf8');
-  res.status(401).end('Access denied, please <a href="javascript:;" onclick="location.reload()">try again</a>.');
+  res.status(401).end(msg || 'Access denied, please <a href="javascript:;" onclick="location.reload()">try again</a>.');
+}
+
+function equalAuth(auth, src) {
+  return auth.name === src.username && auth.pass === src.password;
 }
 
 function verifyLogin(req, res, auth) {
@@ -80,9 +103,6 @@ function verifyLogin(req, res, auth) {
     if (!auth.authKey) {
       auth.authKey = 'whistle_v_lk_' + encodeURIComponent(auth.username);
     }
-  }
-  if (!auth) {
-    return;
   }
   var username = auth.username;
   var password = auth.password;
@@ -97,11 +117,13 @@ function verifyLogin(req, res, auth) {
   if (correctKey === lkey) {
     return true;
   }
-  auth = getAuth(req) || {};
+  var headerAuth = parseAuth(req.headers.authorization);
+  var queryAuth = parseAuth(req.query.authorization);
   if (!isGuest && config.encrypted) {
-    auth.pass = shasum(auth.pass);
+    headerAuth.pass = headerAuth.pass && shasum(headerAuth.pass);
+    queryAuth.pass = queryAuth.pass && shasum(queryAuth.pass);
   }
-  if (auth.name === username && auth.pass === password) {
+  if (equalAuth(headerAuth, auth) || equalAuth(queryAuth, auth)) {
     var options = {
       expires: new Date(Date.now() + (MAX_AGE * 1000)),
       maxAge: MAX_AGE,
@@ -112,29 +134,91 @@ function verifyLogin(req, res, auth) {
   }
 }
 
-function checkAuth(req, res, auth) {
+function checkAuth(req, res) {
+  var username = getUsername();
+  var auth = {
+    authKey: 'whistle_lk_' + encodeURIComponent(username),
+    username: username,
+    password: getPassword()
+  };
   if (verifyLogin(req, res, auth)) {
     return true;
   }
-  requireLogin(res);
+  if (config.specialAuth && SPECIAL_PATHS.indexOf(req.path) !== -1 &&
+    config.specialAuth === req.headers['x-whistle-special-auth']) {
+    return true;
+  }
+  requireLogin(req, res);
   return false;
 }
+
+app.disable('x-powered-by');
+
+function readRemoteStream(req, res, authUrl) {
+  var client;
+  var handleError = function(err) {
+    res.emit('error', err);
+    client && client.destroy();
+  };
+  if (authUrl[0] === 'f') {
+    var stream = fs.createReadStream(authUrl.substring(7));
+    stream.on('error', handleError);
+    return stream.pipe(res);
+  }
+  var options = url.parse(authUrl);
+  options.rejectUnauthorized = false;
+  var httpModule = options.protocol === 'https:' ? https : http;
+  var headers = extend({}, req.headers);
+  delete headers.host;
+  options.headers = headers;
+  client = httpModule.request(options, function(svrRes) {
+    svrRes.on('error', handleError);
+    res.writeHead(svrRes.statusCode, svrRes.headers);
+    svrRes.pipe(res);
+  });
+  client.on('error', handleError);
+  client.end();
+}
+
+app.use(function(req, res, next) {
+  proxyEvent.emit('_request', req.url);
+  var aborted;
+  var abort = function() {
+    if (!aborted) {
+      aborted = true;
+      res.destroy();
+    }
+  };
+  req.on('error', abort);
+  res.on('error', abort).on('close', abort);
+  loadAuthPlugins(req, function(status, msg, authUrl) {
+    if (!status && !authUrl) {
+      return next();
+    }
+    res.set('x-server', 'whistle');
+    res.set('x-module', 'webui');
+    if (!msg && !authUrl) {
+      return res.redirect(status);
+    }
+    if (status === 401) {
+      return requireLogin(req, res, msg);
+    }
+    res.set('Content-Type', 'text/html; charset=utf8');
+    if (authUrl) {
+      return readRemoteStream(req, res, authUrl);
+    }
+    if (status === 502) {
+      return res.status(502).end(msg || 'Error');
+    }
+    res.status(403).end(msg || 'Forbidden');
+  });
+});
 
 if (typeof config.uiMiddleware === 'function') {
   app.use(config.uiMiddleware);
 }
 
 app.use(function(req, res, next) {
-  proxyEvent.emit('_request', req.url);
-  var aborted;
-  req.on('error', abort).on('close', abort);
-  res.on('error', abort);
-  function abort() {
-    if (!aborted) {
-      aborted = true;
-      res.destroy();
-    }
-  }
   var referer = req.headers.referer;
   var options = parseurl(req);
   var path = options.path;
@@ -173,27 +257,75 @@ app.use(function(req, res, next) {
   if (req.headers.host !== 'rootca.pro') {
     return next();
   }
-  res.download(getRootCAFile(), 'rootCA.' + (req.path.indexOf('/cer') ? 'crt' : 'cer'));
+  var type = 'crt';
+  if (!req.path.indexOf('/cer')) {
+    type = 'cer';
+  } else if (!req.path.indexOf('/pem')) {
+    type = 'pem';
+  }
+  res.download(getRootCAFile(), 'rootCA.' + type);
 });
 
 function cgiHandler(req, res) {
-  try {
-    if (req.headers.origin) {
-      res.setHeader('Access-Control-Allow-Origin', req.headers.origin);
-      res.setHeader('Access-Control-Allow-Credentials', true);
-    }
-    require(path.join(__dirname, '..' + req.path))(req, res);
-  } catch(err) {
-    res.status(500).send(config.debugMode ?
-        '<pre>' + util.getErrorStack(err) + '</pre>' : 'Internal Server Error');
+  if (UP_PATH_REGEXP.test(req.path)) {
+    return res.status(403).end('Forbidden');
   }
+  if (req.headers.origin) {
+    res.setHeader('access-control-allow-origin', req.headers.origin);
+    res.setHeader('access-control-allow-credentials', true);
+  }
+  var filepath = path.join(__dirname, '..' + req.path) + '.js';
+  var handleResponse = function() {
+    try {
+      require(filepath)(req, res);
+    } catch(err) {
+      sendError(res, err);
+    }
+  };
+  if (require.cache[filepath]) {
+    return handleResponse();
+  }
+  fs.stat(filepath, function(err, stat) {
+    if (err || !stat.isFile()) {
+      var notFound = err ? err.code === 'ENOENT' : !stat.isFile();
+      var msg;
+      if (config.debugMode) {
+        msg =  '<pre>' + (err ? util.encodeHtml(util.getErrorStack(err)) : 'Not File') + '</pre>';
+      } else {
+        msg = notFound ? 'Not Found' : 'Internal Server Error';
+      }
+      return res.status(notFound ? 404 : 500).send(msg);
+    }
+    handleResponse();
+  });
 }
 
 app.all('/cgi-bin/sessions/*', cgiHandler);
 app.all('/favicon.ico', function(req, res) {
   res.sendFile(htdocs.getImgFile('favicon.ico'));
 });
-app.all(PLUGIN_PATH_RE, function(req, res, next) {
+
+function readPluginPage(req, res, plugin, html, config) {
+  res.type('html');
+  res.write(config);
+  res.write(html);
+  var index = req.path.indexOf('/', 1);
+  if (index === -1) {
+    res.end();
+  } else {
+    var filepath = req.path.substring(index + 1);
+    var reader = fs.createReadStream(path.join(plugin.path, filepath));
+    reader.on('error', function() {
+      if (reader) {
+        reader = null;
+        res.end();
+      }
+    });
+    reader.pipe(res);
+  }
+}
+
+app.all(PLUGIN_PATH_RE, function(req, res) {
   var result = PLUGIN_PATH_RE.exec(req.url);
   var type = result[1];
   var name = result[2];
@@ -204,22 +336,15 @@ app.all(PLUGIN_PATH_RE, function(req, res, next) {
     return res.status(404).send('Not Found');
   }
   if (req.url.indexOf(MENU_URL) !== -1) {
-    res.write(plugin[util.PLUGIN_MENU_CONFIG]);
-    res.write(MENU_HTML);
-    var index = req.path.indexOf('/', 1);
-    if (index === -1) {
-      res.end();
-    } else {
-      var filepath = req.path.substring(index + 1);
-      var reader = fs.createReadStream(path.join(plugin.path, filepath));
-      reader.on('error', function() {
-        if (reader) {
-          reader = null;
-          res.end();
-        }
-      });
-      reader.pipe(res);
-    }
+    return readPluginPage(req, res, plugin, MENU_HTML, plugin[util.PLUGIN_MENU_CONFIG]);
+  }
+  if (req.url.indexOf(INSPECTOR_URL) !== -1) {
+    return readPluginPage(req, res, plugin, INSPECTOR_HTML, plugin[util.PLUGIN_INSPECTOR_CONFIG]);
+  }
+  var internalId = req.headers['x-whistle-internal-id'];
+  if (internalId === util.INTERNAL_ID) {
+    delete req.headers['x-whistle-internal-id'];
+  } else if (plugin.inheritAuth && !checkAuth(req, res)) {
     return;
   }
   if (!slash) {
@@ -228,59 +353,112 @@ app.all(PLUGIN_PATH_RE, function(req, res, next) {
   pluginMgr.loadPlugin(plugin, function(err, ports) {
     if (err || !ports.uiPort) {
       if (err) {
-        res.status(500).send('<pre>' + err + '</pre>');
+        res.status(500).send('<pre>' + util.encodeHtml(err) + '</pre>');
       } else {
         res.status(404).send('Not Found');
       }
       return;
     }
     var options = parseurl(req);
-    req.headers[config.PLUGIN_HOOK_NAME_HEADER] = config.PLUGIN_HOOKS.UI;
+    var headers = req.headers;
+    headers[config.PLUGIN_HOOK_NAME_HEADER] = config.PLUGIN_HOOKS.UI;
+    headers['x-whistle-remote-address'] = req._remoteAddr || util.getRemoteAddr(req);
+    headers['x-whistle-remote-port'] = req._remotePort || util.getRemotePort(req);
     req.url = options.path.replace(result[0].slice(0, -1), '');
     util.transformReq(req, res, ports.uiPort);
   });
 });
 
 app.use(function(req, res, next) {
-  if (ALLOW_PLUGIN_PATHS.indexOf(req.path) !== -1) {
+  var pathname = req.path;
+  if (ALLOW_PLUGIN_PATHS.indexOf(pathname) !== -1) {
     var name = req.headers[config.PROXY_ID_HEADER];
     if (name) {
       return pluginMgr.getPlugin(name + ':') ? next() : res.sendStatus(403);
     }
   }
-  var authKey = config.authKey;
-  if ((authKey && authKey === req.headers['x-whistle-auth-key'])
-    || doNotCheckLogin(req)) {
+  if (doNotCheckLogin(req)) {
+    return next();
+  }
+  if (config.disableWebUI && !config.debugMode && (!config.captureData || pathname !== '/cgi-bin/get-data')) {
+    return res.status(404).end('Not Found');
+  }
+  if (config.authKey && config.authKey === req.headers['x-whistle-auth-key']) {
     return next();
   }
   var guestAuthKey = config.guestAuthKey;
   if (((guestAuthKey && guestAuthKey === req.headers['x-whistle-guest-auth-key'])
-    || verifyLogin(req, res)) && (!req.method || GET_METHOD_RE.test(req.method) || WEINRE_RE.test(req.path))) {
+    || verifyLogin(req, res)) && (!req.method || GET_METHOD_RE.test(req.method)
+    || WEINRE_RE.test(pathname) || GUEST_PATHS.indexOf(pathname) !== -1)) {
     return next();
   }
-  var username = getUsername();
-  var password = getPassword();
-  var authConf = {
-    authKey: 'whistle_lk_' + encodeURIComponent(username),
-    username: username,
-    password: password
-  };
-  if (checkAuth(req, res, authConf)) {
+  if (checkAuth(req, res)) {
     next();
   }
 });
 
-app.all('/cgi-bin/*', function(req, res, next) {
-  return req.path === '/cgi-bin/values/upload' ?
-    uploadUrlencodedParser(req, res, next) : urlencodedParser(req, res, next);
+function sendText(res, text) {
+  res.writeHead(200, {
+    'Content-Type': 'text/plain; charset=utf-8'
+  });
+  res.end(typeof text === 'string' ? text : '');
+}
+
+function parseKey(key) {
+  return key[0] === '$' ? key.slice(2, -1) : key.slice(1, -1);
+}
+
+app.get('/rules', function(req, res) {
+  var query = req.query;
+  var name = query.name || query.key;
+  if (name === 'Default') {
+    name = rulesUtil.rules.getDefault();
+  } else if (!name) {
+    name = rulesUtil.rules.getRawRulesText();
+  } else {
+    name = rulesUtil.rules.get(name);
+  }
+  if (name && query.values !== 'false' && !(query.values <= 0)) {
+    var keys = name.replace(COMMENT_RE, '').match(KEY_RE_G);
+    if (keys) {
+      keys = keys.map(parseKey).map(function (key) {
+        return util.wrapRuleValue(key, rulesUtil.values.get(key), query.values, query.policy);
+      }).join('');
+      if (keys) {
+        name += '\n' + keys;
+      }
+    }
+  }
+  sendText(res, name);
 });
-app.all('/cgi-bin/*', function(req, res, next) {
-  return req.path === '/cgi-bin/values/upload' ?
-    uploadJsonParser(req, res, next) : jsonParser(req, res, next);
+
+app.get('/values', function(req, res) {
+  var name = req.query.name || req.query.key;
+  sendText(res, rulesUtil.values.get(name));
 });
-app.all('/cgi-bin/*', cgiHandler);
+
+app.get('/web-worker.js', urlencodedParser, function(req, res) {
+  var body = getWorker(req.query.id);
+  if (!body) {
+    return res.status(404).end('Not Found');
+  }
+  res.writeHead(200, {
+    'Content-Type': 'application/javascript; charset=utf-8'
+  });
+  res.end(body);
+});
+
+app.all('/cgi-bin/*', function(req, res, next) {
+  req.isUploadReq = UPLOAD_URLS.indexOf(req.path) !== -1;
+  return req.isUploadReq ? uploadUrlencodedParser(req, res, next) : urlencodedParser(req, res, next);
+}, function(req, res, next) {
+  return req.isUploadReq ? uploadJsonParser(req, res, next) : jsonParser(req, res, next);
+}, cgiHandler);
 
 app.use('/preview.html', function(req, res, next) {
+  if (req.headers[config.INTERNAL_ID_HEADER] !== config.INTERNAL_ID) {
+    return res.status(404).end('Not Found');
+  }
   next();
   var index = req.path.indexOf('=') + 1;
   if (index) {
@@ -288,12 +466,29 @@ app.use('/preview.html', function(req, res, next) {
     res.set('content-type', 'text/html;charset=' + charset);
   }
 });
+
+var uiExt = config.uiExt || {};
+var htmlPrepend = uiExt.htmlPrepend;
+var htmlAppend = uiExt.htmlAppend;
+var jsPrepend = uiExt.jsPrepend;
+var jsAppend = uiExt.jsAppend;
+
+function concat(a, b, c) {
+  if (!a && !c) {
+    return b;
+  }
+  var list = [];
+  a && list.push(a);
+  list.push(b);
+  c && list.push(c);
+  return Buffer.concat(list);
+}
+
 if (!config.debugMode) {
-  var indexHtml = fs.readFileSync(htdocs.getHtmlFile('index.html'));
-  var indexJs = fs.readFileSync(htdocs.getJsFile('index.js'));
+  var indexHtml = concat(htmlPrepend, fs.readFileSync(htdocs.getHtmlFile('index.html')), htmlAppend);
+  var indexJs = concat(jsPrepend, fs.readFileSync(htdocs.getJsFile('index.js')), jsAppend);
   var jsETag = shasum(indexJs);
   var gzipIndexJs = zlib.gzipSync(indexJs);
-  var GZIP_RE = /\bgzip\b/i;
   app.use('/js/index.js', function(req, res) {
     if (req.headers['if-none-match'] === jsETag) {
       return res.sendStatus(304);
@@ -303,7 +498,7 @@ if (!config.debugMode) {
       'Cache-Control': 'public, max-age=300',
       ETag: jsETag
     };
-    if (GZIP_RE.test(req.headers['accept-encoding'])) {
+    if (util.canGzip(req)) {
       headers['Content-Encoding'] = 'gzip';
       res.writeHead(200, headers);
       res.end(gzipIndexJs);
@@ -320,8 +515,38 @@ if (!config.debugMode) {
   };
   app.get('/', sendIndex);
   app.get('/index.html', sendIndex);
+} else {
+  if (htmlPrepend || htmlAppend) {
+    var htmlFile = htdocs.getHtmlFile('index.html');
+    var injectHtml = function(req, res) {
+      fs.readFile(htmlFile, function(err, ctn) {
+        if (err) {
+          return sendError(res, err);
+        }
+        res.writeHead(200, {
+          'Content-Type': 'text/html; charset=utf-8'
+        });
+        res.end(concat(htmlPrepend, ctn, htmlAppend));
+      });
+    };
+    app.get('/', injectHtml);
+    app.get('/index.html', injectHtml);
+  }
+  if (jsPrepend || jsAppend) {
+    var jsFile = htdocs.getHtmlFile('js/index.js');
+    app.get('/js/index.js', function(req, res) {
+      fs.readFile(jsFile, function(err, ctn) {
+        if (err) {
+          return sendError(res, err);
+        }
+        res.writeHead(200, {
+          'Content-Type': 'application/javascript; charset=utf-8'
+        });
+        res.end(concat(jsPrepend, ctn, jsAppend));
+      });
+    });
+  }
 }
-app.use(express.static(path.join(__dirname, '../htdocs'), {maxAge: 300000}));
 
 app.get('/', function(req, res) {
   res.sendFile(htdocs.getHtmlFile('index.html'));
@@ -345,6 +570,8 @@ function init(proxy) {
   util = proxy.util;
   setProxy(proxy);
 }
+
+app.use(express.static(path.join(__dirname, '../htdocs'), {maxAge: 300000}));
 
 exports.init = init;
 exports.setupServer = function(server) {

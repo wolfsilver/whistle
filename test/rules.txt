@@ -1,3 +1,4 @@
+/redirect/ redirect://http://test.whistlejs.com
 rf1.w2.org rulesFile://{rulesFile.js} file://{rulesFile.js}
 rf2.w2.org rulesFile://{rulesFile.txt} file://{rulesFile.txt}
 rf3.w2.org rulesFile://{rulesFile2.js} file://{test3.json}
@@ -15,6 +16,22 @@ tunnel://127.0.0.1:8080 filter://https xproxy://127.0.0.1:19999
 http://127.0.0.1:6666/abc.htm 127.0.0.1:8080
 test.internal.path.com proxy://127.0.0.1:8080
 
+%pipe-ws=test1
+%pipe-ws=test2
+%pipe-http=test1
+%pipe-http=test2
+%pipe-tunnel=test1
+%pipe-tunnel=test2
+%test1=test1
+%test1=test2
+%test2=test1
+%test2=test2
+%test3=test1
+%test3=test2
+%test32=test1
+%test32=test2
+
+
 params.test.whistlejs.com/index.html resMerge://(resMerge=test) resType://js
 weinre1.test2.whistlejs.com:1234 weinre://xxx file://(hello) log://test resType://html enable://capture ignore://plugin
 weinre1.test2.whistlejs.com weinre://xxx file://(hello) log://test resType://js enable://capture ignore://plugin
@@ -22,9 +39,13 @@ weinre1.test2.whistlejs.com weinre://xxx file://(hello) log://test resType://js 
 filter.com enable://capture
 filter.com/index.html file://({"ec":0}) excludeFilter://m:post excludeFilter://m:/delete/
 filter.com/index.html file://({"ec":1}) includeFilter://m:delete includeFilter://b:test
-filter.com/index.html file://({"ec":2}) includeFilter://b:test excludeFilter://h:x-test=/\d+/
+filter.com/index.html file://({"ec":2}) includeFilter://b:555 excludeFilter://reqH:x-test=/\d+/
 filter.com/index.html file://({"ec":3}) excludeFilter://h:x-test=/\d+/
 filter.com/index.html file://({"ec":4}) 
+
+filter2.com/test.html file://({"ec":123}) includeFilter:///abc/
+filter2.com/test.html file://({"ec":321}) excludeFilter:///cba/
+filter2.com/test.html file://({"ec":333})
 
 1.tps.whistlejs.com file://() enable://capture resAppend://`{${url.query.name}}`
 2.tps.whistlejs.com resScript://{tps.rules} rawfile://{rawFile2.js} enable://capture
@@ -60,3 +81,5 @@ headerreplace.plugin.whistlejs.com headerReplace://req.host:headerreplace.=&/Plu
 [list[40].a]: "123"
 ```
 .test.wildcard5.com resMerge://{w1.json}
+
+/testx.whistlejs.com/ enable://capture

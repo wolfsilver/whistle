@@ -28,10 +28,10 @@
 3. [**pathReplace** (通过正则或字符串替换请求url，类似str.replace)](pathReplace.html)
 
 #### 修改请求方法
-1. . [**method** (修改请求方法)](method.html)
+1. [**method** (修改请求方法)](method.html)
 
 #### 修改请求头
-1. . [**referer** (修改请求referer)](referer.html)
+1. [**referer** (修改请求referer)](referer.html)
 2. [**auth** (修改请求用户名密码)](auth.html)
 3. [**ua** (修改请求user-agent)](ua.html)
 4. [**forwardedFor** (修改请求头x-forwarded-for)](forwardedFor.html)
@@ -56,8 +56,8 @@
 5. [**reqMerge** (修改请求参数或请求内容)](reqMerge.html)
 
 #### 修改响应状态码
-1. [**statusCode** (直接响应)](statusCode.html)
-2. [**replaceStatus** (替换后台的响应状态码)](replaceStatus.html)
+1. [**replaceStatus** (替换后台的响应状态码)](replaceStatus.html)
+2. [**statusCode** (直接响应)](rule/statusCode.html)
 
 #### 修改响应头
 1. [**resHeaders** (修改响应头)](resHeaders.html)
@@ -66,7 +66,6 @@
 4. [**resCookies** (修改响应cookies)](resCookies.html)
 5. [**resCors** (修改响应cors)](resCors.html)
 6. [**attachment** (设置下载头部)](attachment.html)
-7. [**redirect** (302重定向)](redirect.html)
 
 #### 修改响应内容
 > 根据不同的数据类型采用不同的协议
@@ -79,6 +78,8 @@
     * [**xtpl** (替换本地目标文件，如果本地文件找不到会继续请求线上，可用于模拟jsonp请求)](rule/xtpl.html)
     * [**rawfile** (替换本地http响应内容格式的文件)](rule/rawfile.html)
     * [**xrawfile** (替换本地http响应内容格式的文件，如果本地文件找不到会继续请求线上)](rule/xrawfile.html)
+    * [**redirect** (302 重定向))](rule/redirect.html)
+    * [**statusCode** (直接响应)](rule/statusCode.html)
     * [**自定义**](rule/custom.html)
 2. [**resMerge** (修改响应参数)](resMerge.html)
 3. [**resPrepend** (往响应内容前面添加数据)](resPrepend.html)
@@ -95,9 +96,12 @@
 14. [**cssAppend** (往响应为html或css的内容后面追加数据)](cssAppend.md)
 15. [**jsAppend** (往响应为html或js的内容后面追加数据)](jsAppend.md)
 
+#### 修改 trailers
+1. [**trailers** (302重定向)](trailers.html)
+
 #### 过滤配置
 1. [**filter (excludeFilter|includeFilter)** (过滤规则，隐藏请求等)](filter.html)
-2. [**ignore** (忽略规则)](ignore.html)
+2. [**ignore (skip)** (忽略规则)](ignore.html)
 
 #### 启用或禁用一些配置
 1. [**enable** (设置capture HTTPs，隐藏请求等)](enable.html)
@@ -120,3 +124,7 @@
 3. [**weinre** (设置weinre，调试手机页面)](weinre.html)
 4. [**log** (打印网页js错误或者调试信息)](log.html)
 5. [**pipe** 把数据流转到插件](rules/pipe.html)
+
+
+#### 修改加密算法
+1. [**cipher** (设置兜底加密算法)](cipher.html)

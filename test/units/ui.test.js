@@ -2,38 +2,6 @@
 var util = require('../util.test');
 
 module.exports = function() {
-  util.request({
-    uri: 'https://local.whistlejs.com/cgi-bin/rules/import',
-    method: 'post',
-    form: {
-      key:'value',
-      'test': 'abc'
-    }
-  });
-  util.request({
-    uri: 'https://local.whistlejs.com/cgi-bin/rules/import',
-    method: 'post',
-    form: {
-      key:'value',
-      'test': '{"abc": 123}'
-    }
-  });
-  util.request({
-    uri: 'https://local.whistlejs.com/cgi-bin/values/import',
-    method: 'post',
-    form: {
-      key:'value',
-      'test': 'abc'
-    }
-  });
-  util.request({
-    uri: 'https://local.whistlejs.com/cgi-bin/values/import',
-    method: 'post',
-    form: {
-      key:'value',
-      'test': '{"abc": 123}'
-    }
-  });
   util.request('https://local.whistlejs.com/favicon.ico?doNotParseJson');
   util.request('https://local.whistlejs.com/?doNotParseJson');
   util.request('http://rd2webui.w2.org/index.html?doNotParseJson');
@@ -51,7 +19,7 @@ module.exports = function() {
   util.request('http://local.whistlejs.com/cgi-bin/rules/list');
   util.request('http://local.whistlejs.com/cgi-bin/rootca');
   util.request('http://local.whistlejs.com/cgi-bin/root?doNotParseJson', function(res) {
-    res.statusCode.should.be.equal(500);
+    res.statusCode.should.be.equal(404);
   });
 
   util.request('https://local.whistlejs.com/index.html?doNotParseJson');
@@ -70,12 +38,6 @@ module.exports = function() {
   util.request('http://local.whistlejs.com/plugin.test');
   util.request({
     url: 'http://local.whistlejs.com/cgi-bin/log/get',
-    headers: {
-      origin: 'http://wproxy.org'
-    }
-  });
-  util.request({
-    url: 'http://local.whistlejs.com/cgi-bin/show-host-ip-in-res-headers',
     headers: {
       origin: 'http://wproxy.org'
     }
@@ -154,14 +116,6 @@ module.exports = function() {
   });
   util.request({
     url: 'http://local.whistlejs.com/cgi-bin/rules/allow-multiple-choice',
-    method: 'post'
-  });
-  util.request({
-    url: 'http://local.whistlejs.com/cgi-bin/rules/sync-with-sys-hosts',
-    method: 'post'
-  });
-  util.request({
-    url: 'http://local.whistlejs.com/cgi-bin/rules/set-sys-hosts',
     method: 'post'
   });
   util.request({
@@ -305,14 +259,6 @@ module.exports = function() {
     method: 'post'
   });
   util.request({
-    url: 'http://local.wproxy.org:1234/cgi-bin/rules/sync-with-sys-hosts',
-    method: 'post'
-  });
-  util.request({
-    url: 'http://local.wproxy.org:1234/cgi-bin/rules/set-sys-hosts',
-    method: 'post'
-  });
-  util.request({
     url: 'http://local.wproxy.org:1234/cgi-bin/log/set',
     method: 'get',
     form: {
@@ -452,14 +398,6 @@ module.exports = function() {
   });
   util.request({
     url: 'http://local.whistle.com/cgi-bin/rules/allow-multiple-choice',
-    method: 'post'
-  });
-  util.request({
-    url: 'http://local.whistle.com/cgi-bin/rules/sync-with-sys-hosts',
-    method: 'post'
-  });
-  util.request({
-    url: 'http://local.whistle.com/cgi-bin/rules/set-sys-hosts',
     method: 'post'
   });
   util.request({

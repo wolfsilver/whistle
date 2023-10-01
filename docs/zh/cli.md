@@ -34,6 +34,8 @@ w2 start -S 7788 -C 8888
 *Note: 不同实例要配置不同的代理*
 
 ### `w2 add [filepath]`
+> 如果要添加到 [Whistle 客户端](https://github.com/avwo/whistle-client)需要添加参数 `--client`，即：`w2 add --client`
+
 也可以用 `w2 use [filepath]`，通过filepath对应的js文件获取规则配置，filepath可选，默认为当前目录的 `.whistle.js`。
 
 如项目根目录文件 `.whistle.js`：
@@ -41,6 +43,7 @@ w2 start -S 7788 -C 8888
 ```
 const pkg = require('./package.json');
 
+exports.groupName = '项目开发环境'; // 可选，设置分组， 要求 Whistle 版本 >= v2.9.21
 exports.name = `[${pkg.name}]本地环境配置`;
 exports.rules = `
 test.example.com http://127.0.0.1:5566

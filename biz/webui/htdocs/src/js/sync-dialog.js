@@ -14,88 +14,140 @@ function getCgiUrl(moduleName, url) {
 }
 
 var SyncDialog = React.createClass({
-  getInitialState: function() {
+  getInitialState: function () {
     return {};
   },
-  show: function(options, rulesModal, valuesModal) {
+  show: function (plugin, rulesModal, valuesModal, cb) {
     var self = this;
     self.rulesModal = rulesModal;
     self.valuesModal = valuesModal;
-    if (!util.isString(options.rulesUrl)) {
-      options.rulesUrl = null;
+    self.plugin = plugin;
+    if (!util.isString(plugin.rulesUrl)) {
+      plugin.rulesUrl = null;
     }
-    if (!util.isString(options.valuesUrl)) {
-      options.valuesUrl = null;
+    if (!util.isString(plugin.valuesUrl)) {
+      plugin.valuesUrl = null;
     }
-    self.setState(options, function() {
-      self.refs.syncDialog.show();
-    });
+    if (plugin.rulesUrl || plugin.valuesUrl) {
+      self.setState(plugin, typeof cb === 'function' ? cb : function () {
+        self.refs.syncDialog.show();
+      });
+    }
   },
-  syncRules: function() {
+  _syncRules: function(history) {
     var self = this;
     var rulesUrl = self.state.rulesUrl;
     if (self.loadingRules || !util.isString(rulesUrl)) {
       return;
     }
     self.loadingRules = true;
-    var loadRules = dataCenter.createCgi(getCgiUrl(self.state.moduleName, rulesUrl));
-    loadRules(function(data, xhr) {
+    if (history) {
+      rulesUrl += (rulesUrl.indexOf('?') === -1 ? '?' : '&') + 'history=' + encodeURIComponent(history);
+    }
+    var loadRules = dataCenter.createCgi(
+      getCgiUrl(self.state.moduleName, rulesUrl)
+    );
+    loadRules(function (data, xhr) {
       self.loadingRules = false;
       self.setState({});
       if (!data) {
         return util.showSystemError(xhr);
       }
-      self.refs.kvDialog.show(data, self.rulesModal, self.valuesModal);
+      self.plugin.selectedRulesHistory = history;
+      self.refs.kvDialog.show(data, self.rulesModal, self.valuesModal, false, history);
     });
     self.setState({});
   },
-  syncValues: function() {
+  _syncValues: function (history) {
     var self = this;
     var valuesUrl = self.state.valuesUrl;
     if (self.loadingValues || !util.isString(valuesUrl)) {
       return;
     }
     self.loadingValues = true;
-    var loadValues = dataCenter.createCgi(getCgiUrl(self.state.moduleName, valuesUrl));
-    loadValues(function(data, xhr) {
+    if (history) {
+      valuesUrl += (valuesUrl.indexOf('?') === -1 ? '?' : '&') + 'history=' + encodeURIComponent(history);
+    }
+    var loadValues = dataCenter.createCgi(
+      getCgiUrl(self.state.moduleName, valuesUrl)
+    );
+    loadValues(function (data, xhr) {
       self.loadingValues = false;
       self.setState({});
       if (!data) {
         return util.showSystemError(xhr);
       }
-      self.refs.kvDialog.show(data, self.rulesModal, self.valuesModal, true);
+      self.plugin.selectedValuesHistory = history;
+      self.refs.kvDialog.show(data, self.rulesModal, self.valuesModal, true, history);
     });
     self.setState({});
   },
-  render: function() {
+  syncRules: function () {
+    this._syncRules(this.plugin.selectedRulesHistory);
+  },
+  syncValues: function () {
+    this._syncValues(this.plugin.selectedValuesHistory);
+  },
+  onHistoryChange: function(history, isValues) {
+    if (isValues) {
+      this._syncValues(history);
+    } else {
+      this._syncRules(history);
+    }
+  },
+  render: function () {
     var state = this.state;
     return (
       <Dialog ref="syncDialog" wstyle="w-sync-dialog">
         <div className="modal-body">
-          <button onClick={this.syncRules} disabled={this.loadingRules || !util.isString(state.rulesUrl)} type="button" className="btn btn-primary">
-            <span className="glyphicon glyphicon-list" /> {this.loadingRules ? 'Loading' : 'Sync'} Rules
+          <button
+            onClick={this.syncRules}
+            disabled={this.loadingRules || !util.isString(state.rulesUrl)}
+            type="button"
+            className="btn btn-primary"
+          >
+            <span className="glyphicon glyphicon-list" />{' '}
+            {this.loadingRules ? 'Loading' : 'Sync'} Rules
           </button>
-          <button onClick={this.syncValues} disabled={this.loadingValues || !util.isString(state.valuesUrl)} type="button" className="btn btn-default">
-            <span className="glyphicon glyphicon-folder-open" /> {this.loadingValues ? 'Loading' : 'Sync'} Values
+          <button
+            onClick={this.syncValues}
+            disabled={this.loadingValues || !util.isString(state.valuesUrl)}
+            type="button"
+            className="btn btn-default"
+          >
+            <span className="glyphicon glyphicon-folder-close" />{' '}
+            {this.loadingValues ? 'Loading' : 'Sync'} Values
           </button>
         </div>
         <div className="modal-footer">
-          <button type="button" className="btn btn-default" data-dismiss="modal">Close</button>
+          <button
+            type="button"
+            className="btn btn-default"
+            data-dismiss="modal"
+          >
+            Close
+          </button>
         </div>
-        <KVDialog ref="kvDialog" />
+        <KVDialog onHistoryChange={this.onHistoryChange} ref="kvDialog" />
       </Dialog>
     );
   }
 });
 
 var SyncDialogWrap = React.createClass({
-  shouldComponentUpdate: function() {
+  shouldComponentUpdate: function () {
     return false;
   },
-  show: function(options, rulesModal, valuesModal) {
-    this.refs.syncDialog.show(options, rulesModal, valuesModal);
+  show: function (plugin, rulesModal, valuesModal, cb) {
+    this.refs.syncDialog.show(plugin, rulesModal, valuesModal, cb);
   },
-  render: function() {
+  syncRules: function() {
+    this.refs.syncDialog.syncRules();
+  },
+  syncValues: function() {
+    this.refs.syncDialog.syncValues();
+  },
+  render: function () {
     return <SyncDialog ref="syncDialog" />;
   }
 });

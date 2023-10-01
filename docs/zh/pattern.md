@@ -38,6 +38,7 @@ whistle的匹配模式(`pattern`)大体可以分成 **域名、路径、正则�
 	# 匹配指定路径下的所有请求
 	www.test.com/xxx operatorURI
 	www.test.com:8080/xxx operatorURI
+  */xxx operatorURI # 使用了通配符匹配特性
 
 路径匹配不支持tunnel协议的url。
 
@@ -45,7 +46,7 @@ whistle的匹配模式(`pattern`)大体可以分成 **域名、路径、正则�
 正则的语法及写法跟js的正则表达式一致，支持两种模式：/reg/、/reg/i 忽略大小写，支持子匹配，<del>但不支持/reg/g</del>，且可以通过正则的子匹配把请求url里面的部分字符串传给operatorURI，pattern和operatorURI位置可以调换。
 
 	#匹配所有请求
-	/./ operatorURI
+	* operatorURI
 
 	#匹配url里面包含摸个关键字的请求，且忽略大小写
 	/keyword/i operatorURI
@@ -99,7 +100,7 @@ whistle的匹配模式(`pattern`)大体可以分成 **域名、路径、正则�
 
 ```
 
-如果请求url为 `https://www.example.com/test/abc?123test`，这第一个配置 `$1 = abc?123&test`，第二个配置 `$1 = abc?123`，而 `https://www.example.com/test/abc?123test2` 只能匹配第一个。
+如果请求url为 `https://www.example.com/test/abc?123&test`，这第一个配置 `$1 = abc?123&test`，第二个配置 `$1 = abc?123`，而 `https://www.example.com/test/abc?123test2` 只能匹配第一个。
 
 通配符在请求url里面的不同位置及个数匹配的字符类型也不一样，一般请求url的结果：
 ```
@@ -178,3 +179,4 @@ whistle的匹配模式(`pattern`)大体可以分成 **域名、路径、正则�
 
 如： `*/cgi-bin 10.10.1.1:9999`，表示所有 `xxx.xxx.xxx/cgi-bin/xxx` 的请求都会请求 `10.10.1.1:9999` 对应的服务器。
 
+**除此之外，可以结合 [filter(excludeFilter|includeFilter)](./rules/filter.html)实现 更复杂的匹配模式**

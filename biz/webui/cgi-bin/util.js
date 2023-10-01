@@ -1,10 +1,14 @@
+var gzip = require('zlib').gzip;
 var util = require('../../../lib/util');
 var config = require('../../../lib/config');
+var proc = require('../../../lib/util/process');
 var properties = require('../../../lib/rules/util').properties;
 
 var PID = process.pid;
 var MAX_OBJECT_SIZE = 1024 * 1024 * 6;
 var index = 0;
+var dnsOverHttps = config.dnsOverHttps;
+var doh = !!dnsOverHttps;
 
 exports.getClientId = function() {
   if (index > 9999) {
@@ -14,22 +18,42 @@ exports.getClientId = function() {
 };
 
 exports.getServerInfo = function(req) {
+  var baseDir;
+  if (!config.networkMode && !config.pluginsMode) {
+    baseDir = config.baseDirHash;
+  }
   var info = {
     pid: PID,
+    pInfo: proc,
+    ipv6Only: config.ipv6Only,
+    dcc: config.disableCustomCerts,
+    dns: dnsOverHttps || config.dnsServer,
+    doh: doh,
+    bip: config.host,
+    df: config.dnsOptional,
+    r6: config.resolve6,
     version: config.version,
+    cmdName: config.cmdName,
+    hideLeftMenu: config.hideLeftMenu,
     networkMode: config.networkMode,
+    rulesOnlyMode: config.rulesOnlyMode,
     pluginsMode: config.pluginsMode,
+    ndr: config.notAllowedDisableRules,
+    ndp: config.notAllowedDisablePlugins,
+    drb: config.disabledBackOption,
+    drm: config.disabledMultipleOption,
     rulesMode: config.rulesMode,
     strictMode: config.strict,
     multiEnv: config.multiEnv,
-    baseDir: config.baseDirHash,
+    baseDir: baseDir,
     username: config.username,
     nodeVersion: process.version,
-    latestVersion: properties.get('latestVersion'),
+    latestVersion: properties.getLatestVersion('latestVersion'),
     host: util.hostname(),
     isWin: util.isWin,
     port: config.port,
     realPort: config.realPort,
+    realHost: config.realHost,
     socksPort: config.socksPort,
     httpPort: config.httpPort,
     httpsPort: config.httpsPort,
@@ -43,7 +67,7 @@ exports.getServerInfo = function(req) {
       if (iface.internal) {
         return;
       }
-      info[iface.family == 'IPv4' ? 'ipv4' : 'ipv6'].push(iface.address);
+      info[iface.family == 'IPv4' || iface.family === 4 ? 'ipv4' : 'ipv6'].push(iface.address);
     });
   });
 
@@ -114,3 +138,32 @@ function formatDate() {
 exports.formatDate = formatDate;
 
 exports.getClientIp = util.getClientIp;
+
+function sendError(res, err) {
+  res.status(500).send(config.debugMode ?
+    '<pre>' + util.encodeHtml(util.getErrorStack(err)) + '</pre>' : 'Internal Server Error');
+}
+
+exports.sendError = sendError;
+
+exports.sendGzip = function(req, res, data) {
+  if (!util.canGzip(req)) {
+    return res.json(data);
+  }
+  gzip(JSON.stringify(data), function(err, result) {
+    if (err) {
+      try {
+        res.json(data);
+      } catch (e) {
+        sendError(res, e);
+      }
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Encoding': 'gzip',
+      'Content-Length': result.length
+    });
+    res.end(result);
+  });
+};

@@ -1,4 +1,5 @@
 var cp = require('child_process');
+var program = require('starting');
 var util = require('util');
 var os = require('os');
 var fs = require('fs');
@@ -6,12 +7,14 @@ var fse = require('fs-extra2');
 var config = require('../lib/config');
 var colors = require('colors/safe');
 var path = require('path');
+var createHmac = require('crypto').createHmac;
+
 /*eslint no-console: "off"*/
 var CHECK_RUNNING_CMD = process.platform === 'win32' ? 
   'tasklist /fi "PID eq %s" | findstr /i "node.exe"'
   : 'ps -f -p %s | grep "node"';
 var isWin = process.platform === 'win32';
-  
+
 function isRunning(pid, callback) {
   pid ? cp.exec(util.format(CHECK_RUNNING_CMD, pid), 
     function (err, stdout, stderr) {
@@ -26,7 +29,7 @@ function getIpList() {
   var ifaces = os.networkInterfaces();
   Object.keys(ifaces).forEach(function(ifname) {
     ifaces[ifname].forEach(function (iface) {
-      if (iface.family == 'IPv4') {
+      if (iface.family == 'IPv4' || iface.family === 4) {
         ipList.push(iface.address);
       }
     });
@@ -61,7 +64,12 @@ function showKillError() {
 
 exports.showKillError = showKillError;
 
+function getIpHost(ip) {
+  return ip.indexOf(':') === -1 ? ip : '[' + ip + ']';
+}
+
 function showUsage(isRunning, options, restart) {
+  options = formatOptions(options);
   if (isRunning) {
     if (restart) {
       showKillError();
@@ -72,33 +80,48 @@ function showUsage(isRunning, options, restart) {
     info('[i] ' + config.name + '@' + config.version + (restart ? ' restarted' : ' started'));
   }
   var port = /^\d+$/.test(options.port) && options.port > 0 ?  options.port : config.port;
-  var list = options.host ? [options.host] : getIpList();
+  var list = options.host && typeof options.host === 'string' ? [options.host] : getIpList();
   info('[i] 1. use your device to visit the following URL list, gets the ' + colors.bold('IP') + ' of the URL you can access:');
   info(list.map(function(ip) {
-    return '       http://' + colors.bold(ip) + (port ? ':' + port : '') + '/';
+    return '       http://' + colors.bold(getIpHost(ip)) + (port && port != 80 ? ':' + port : '') + '/';
   }).join('\n'));
 
   warn('       Note: If all the above URLs are unable to access, check the firewall settings');
   warn('             For help see ' + colors.bold('https://github.com/avwo/whistle'));
-  info('[i] 2. configure your device to use ' + config.name + ' as its HTTP and HTTPS proxy on ' + colors.bold('IP:') + port);
+  info('[i] 2. set the HTTP proxy on your device with ' + colors.bold((list.length === 1 ? 'IP(' + list[0] + ')' : 'the above IP') + ' & PORT(' + port + ')'));
   info('[i] 3. use ' + colors.bold('Chrome') + ' to visit ' + colors.bold('http://' + (options.localUIHost || config.localUIHost) + '/') + ' to get started');
 
   if (parseInt(process.version.slice(1), 10) < 6) {
-    warn(colors.bold('\nWarning: The current Node version is too low, access https://nodejs.org to install the latest version, or may not be able to Capture HTTPS CONNECTs\n'));
+    warn(colors.bold('\nWarning: The current Node version is too low, access https://nodejs.org to install the latest version, or may not be able to Capture HTTPS CONNECTS\n'));
   }
+  var bypass = program.init;
+  if (bypass == null) {
+    return;
+  }
+  return {
+    host: options.host || '127.0.0.1',
+    port: port,
+    bypass: typeof bypass === 'string' ? bypass : undefined
+  };
 }
 
 exports.showUsage = showUsage;
 
-function getHomedir() {
-  //默认设置为`~`，防止Linux在开机启动时Node无法获取homedir
-  return (typeof os.homedir == 'function' ? os.homedir() :
-    process.env[process.platform == 'win32' ? 'USERPROFILE' : 'HOME']) || '~';
+function getDataDir() {
+  return path.resolve(config.getHomedir(), '.startingAppData');
 }
 
-function getDataDir() {
-  return path.resolve(getHomedir(), '.startingAppData');
+function formatOptions(options) {
+  if (!options || (!/^(?:([\w.-]+):)?([1-9]\d{0,4})$/.test(options.port) &&
+    !/^\[([\w.:]+)\]:([1-9]\d{0,4})$/.test(options.port))) {
+    return options;
+  }
+  options.host = options.host || RegExp.$1;
+  options.port = parseInt(RegExp.$2, 10);
+  return options;
 }
+
+exports.formatOptions = formatOptions;
 
 function readConfig(storage) {
   var dataDir = getDataDir();
@@ -107,7 +130,9 @@ function readConfig(storage) {
     return;
   }
   try {
-    return fse.readJsonSync(configFile);
+    var conf = fse.readJsonSync(configFile);
+    conf && formatOptions(conf.options);
+    return conf;
   } catch(e) {}
 }
 
@@ -134,3 +159,14 @@ function readConfigList() {
 
 exports.readConfig = readConfig;
 exports.readConfigList = readConfigList;
+exports.getHash = function(str) {
+  var hmac = createHmac('sha256', 'a secret');
+  return hmac.update(str).digest('hex');
+};
+
+exports.getDefaultPort = function () {
+  var conf = readConfig();
+  conf = conf && conf.options;
+  var port = conf && conf.port;
+  return port > 0 ? port : 8899;
+};

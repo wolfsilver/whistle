@@ -3,14 +3,14 @@ var dataCenter = require('./data-center');
 var events = require('./events');
 
 var FilterBtn = React.createClass({
-  getInitialState: function() {
+  getInitialState: function () {
     return {
       hasFilterText: !!dataCenter.filterIsEnabled()
     };
   },
-  componentDidMount: function() {
+  componentDidMount: function () {
     var self = this;
-    events.on('filterChanged', function() {
+    events.on('filterChanged', function () {
       var hasFilterText = !!dataCenter.filterIsEnabled();
       if (hasFilterText !== self.state.hasFilterText) {
         self.setState({
@@ -18,23 +18,25 @@ var FilterBtn = React.createClass({
         });
       }
     });
+    events.on('accountRulesChanged', function() {
+      self.setState({});
+    });
   },
-  render: function() {
-    var hide = this.props.hide;
-    var isNetwork = this.props.isNetwork;
-    var hasFilterText = isNetwork ? this.state.hasFilterText : this.props.disabledRules;
-    var className = hasFilterText ? ' w-menu-enable'  : '';
+  render: function () {
+    var props = this.props;
+    var hide = props.hide;
+    var isNetwork = props.isNetwork;
+    var className =
+      (isNetwork ? this.state.hasFilterText : dataCenter.hasAccountRules) ? ' w-menu-enable' : '';
     return (
       <a
-        onClick={this.props.onClick}
+        onClick={props.onClick}
         className={'w-settings-menu' + className}
-        style={{display: hide ? 'none' : ''}}
-        href="javascript:;"
+        style={{ display: hide ? 'none' : '' }}
         draggable="false"
       >
-        <span
-          className={'glyphicon glyphicon-' + (isNetwork ? 'filter' : 'cog')}
-        />{isNetwork ? 'Filter' : 'Settings'}
+        <span className="glyphicon glyphicon-cog" />
+        Settings
       </a>
     );
   }

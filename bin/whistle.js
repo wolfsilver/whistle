@@ -7,18 +7,33 @@ var useRules = require('./use');
 var showStatus = require('./status');
 var util = require('./util');
 var plugin = require('./plugin');
+var setProxy = require('./proxy');
+var installCA = require('./ca/cli');
 
-var showUsage = util.showUsage;
 var error = util.error;
-var warn = util.warn;
 var info = util.info;
+
+function handleEnd(err, options, restart) {
+  options = util.showUsage(err, options, restart);
+  if (!options) {
+    return;
+  }
+  var host = options.host + ':' + options.port;
+  var argv = [host];
+  if (options.bypass) {
+    argv.push('-x', options.bypass);
+  }
+  setProxy(argv);
+  installCA([host]);
+}
 
 function showStartupInfo(err, options, debugMode, restart) {
   if (!err || err === true) {
-    return showUsage(err, options, restart);
+    return handleEnd(err, options, restart);
   }
   if (/listen EADDRINUSE/.test(err)) {
-    error('[!] Failed to bind proxy port ' + (options.port || config.port) + ': The port is already in use');
+    options = util.formatOptions(options);
+    error('[!] Failed to bind proxy port ' + (options.host ? options.host + ':' : '') + (options.port || config.port) + ': The port is already in use');
     info('[i] Please check if ' + config.name + ' is already running, you can ' + (debugMode ? 'stop whistle with `w2 stop` first' : 'restart whistle with `w2 restart`'));
     info('    or if another application is using the port, you can change the port with ' + (debugMode ? '`w2 run -p newPort`\n' : '`w2 start -p newPort`\n'));
   } else if (err.code == 'EACCES' || err.code == 'EPERM') {
@@ -27,6 +42,12 @@ function showStartupInfo(err, options, debugMode, restart) {
   }
 
   error(err.stack ? 'Date: ' + new Date().toLocaleString() + '\n' + err.stack : err);
+}
+
+function getName() {
+  if (/[/\\](\w+)$/.test(process.argv[1])) {
+    return RegExp.$1;
+  }
 }
 
 program.setConfig({
@@ -41,14 +62,14 @@ program.setConfig({
     var hash = options && options.storage && encodeURIComponent(options.storage);
     return path.join(__dirname, '../index.js') + (hash ? '#' + hash + '#' : '');
   },
-  name: config.name,
+  name: getName() || config.name,
   version: config.version,
   runCallback: function(err, options) {
     if (err) {
       showStartupInfo(err, options, true);
       return;
     }
-    showUsage(false, options);
+    handleEnd(false, options);
     console.log('Press [Ctrl+C] to stop ' + config.name + '...');
   },
   startCallback: showStartupInfo,
@@ -65,7 +86,7 @@ program.setConfig({
         error('[!] ' + err.message);
       }
     } else {
-      warn('[!] No running ' + config.name);
+      showStatus.showAll(true);
     }
   }
 });
@@ -74,15 +95,19 @@ program
   .command('status')
   .description('Show the running status');
 program
-  .command('add [filepath]')
+  .command('add')
   .description('Add rules from local js file (.whistle.js by default)');
+program.command('proxy')
+  .description('Set global proxy');
+program.command('ca')
+  .description('Install root CA');
 program.command('install')
-  .description('Install a whistle plugin');
+  .description('Install whistle plugin');
 program.command('uninstall')
-  .description('Uninstall a whistle plugin');
+  .description('Uninstall whistle plugin');
 program.command('exec')
-  .description('Exec whistle plugin command');
-  
+  .description('Exec whistle plugin cmd');
+
 program
   .option('-D, --baseDir [baseDir]', 'set the configured storage root path', String, undefined)
   .option('-z, --certDir [directory]', 'set custom certificate store directory', String, undefined)
@@ -92,25 +117,29 @@ program
   .option('-w, --password [password]', 'set the password to access the web ui', String, undefined)
   .option('-N, --guestName [username]', 'set the the guest name to access the web ui (can only view the data)', String, undefined)
   .option('-W, --guestPassword [password]', 'set the guest password to access the web ui (can only view the data)', String, undefined)
-  .option('-s, --sockets [number]', 'set the max number of cached long connection on each domain (' + config.sockets + ' by default)', parseInt, undefined)
+  .option('-s, --sockets [number]', 'set the max number of cached connections on each domain (' + config.sockets + ' by default)', parseInt, undefined)
   .option('-S, --storage [newStorageDir]', 'set the configured storage directory', String, undefined)
   .option('-C, --copy [storageDir]', 'copy the configuration of the specified directory to a new directory', String, undefined)
-  .option('-c, --dnsCache [time]', 'set the cache time of DNS (30000ms by default)', String, undefined)
+  .option('-c, --dnsCache [time]', 'set the cache time of DNS (60000ms by default)', String, undefined)
   .option('-H, --host [boundHost]', 'set the bound host (INADDR_ANY by default)', String, undefined)
-  .option('-p, --port [proxyPort]', 'set the proxy port (' + config.port + ' by default)', parseInt, undefined)
-  .option('-P, --uiport [uiport]', 'set the webui port', parseInt, undefined)
+  .option('-p, --port [proxyPort]', 'set the proxy port (' + config.port + ' by default)', String, undefined)
+  .option('-P, --uiport [uiport]', 'set the webui port', String, undefined)
   .option('-m, --middlewares [script path or module name]', 'set the express middlewares loaded at startup (as: xx,yy/zz.js)', String, undefined)
-  .option('-M, --mode [mode]', 'set the way of starting the whistle mode (as: pureProxy|debug|multiEnv)', String, undefined)
+  .option('-M, --mode [mode]', 'set the starting mode (as: pureProxy|debug|multiEnv|capture|disableH2|network|rules|plugins|prod)', String, undefined)
   .option('-t, --timeout [ms]', 'set the request timeout (' + config.timeout + 'ms by default)', parseInt, undefined)
   .option('-e, --extra [extraData]', 'set the extra parameters for plugin', String, undefined)
   .option('-f, --secureFilter [secureFilter]', 'set the path of secure filter', String, undefined)
-  .option('-r, --shadowRules [shadowRules]', 'set the shadow/default rules', String, undefined)
+  .option('-r, --shadowRules [shadowRules]', 'set the shadow (default) rules', String, undefined)
   .option('-R, --reqCacheSize [reqCacheSize]', 'set the cache size of request data (600 by default)', String, undefined)
   .option('-F, --frameCacheSize [frameCacheSize]', 'set the cache size of webSocket and socket\'s frames (512 by default)', String, undefined)
   .option('-A, --addon [pluginPaths]', 'add custom plugin paths', String, undefined)
-  .option('--socksPort [socksPort]', 'set the socksv5 server port', parseInt, undefined)
-  .option('--httpPort [httpPort]', 'set the http server port', parseInt, undefined)
-  .option('--httpsPort [httpsPort]', 'set the https server port', parseInt, undefined)
+  .option('--init [bypass]', 'auto set global proxy (and bypass) and install root CA')
+  .option('--cluster [workers]', 'start the cluster server and set worker number (os.cpus().length by default)', String, undefined)
+  .option('--config [config]', 'load the startup config from a local file', String, undefined)
+  .option('--dnsServer [dnsServer]', 'set custom dns servers', String, undefined)
+  .option('--socksPort [socksPort]', 'set the socksv5 server port', String, undefined)
+  .option('--httpPort [httpPort]', 'set the http server port', String, undefined)
+  .option('--httpsPort [httpsPort]', 'set the https server port', String, undefined)
   .option('--no-global-plugins', 'do not load any globally installed plugins')
   .option('--no-prev-options', 'do not reuse the previous options when restarting')
   .option('--inspect [[host:]port]', 'activate inspector on host:port (127.0.0.1:9229 by default)')
@@ -123,12 +152,19 @@ var removeItem = function(list, name) {
   var i = list.indexOf(name);
   i !== -1 && list.splice(i, 1);
 };
+if (argv.indexOf('--init') !== -1) {
+  process.env.WHISTLE_MODE = (process.env.WHISTLE_MODE || '') + '|persistentCapture';
+}
 if (cmd === 'status') {
-  var all = argv[3] === '--all';
+  var all = argv[3] === '--all' || argv[3] === '-l';
   if (argv[3] === '-S') {
     storage = argv[4];
   }
   showStatus(all, storage);
+} else if (cmd === 'proxy') {
+  setProxy(Array.prototype.slice.call(argv, 3));
+} else if (cmd === 'ca') {
+  installCA(Array.prototype.slice.call(argv, 3));
 } else if (/^([a-z]{1,2})?uni(nstall)?$/.test(cmd)) {
   plugin.uninstall(Array.prototype.slice.call(argv, 3));
 } else if (/^([a-z]{1,2})?i(nstall)?$/.test(cmd)) {
@@ -143,6 +179,16 @@ if (cmd === 'status') {
   if (force) {
     argv.splice(index, 1);
   }
+  index = argv.indexOf('-c');
+  var isClient = index !== -1;
+  if (isClient) {
+    argv.splice(index, 1);
+  }
+  index = argv.indexOf('--client');
+  if (index !== -1) {
+    isClient = true;
+    argv.splice(index, 1);
+  }
   var filepath = argv[3];
   if (filepath === '-S') {
     filepath = null;
@@ -153,11 +199,15 @@ if (cmd === 'status') {
   if (filepath && /^-/.test(filepath)) {
     filepath = null;
   }
-  useRules(filepath, storage, force);
+  useRules(filepath, storage, force, isClient);
 } else if ((cmd === 'run' || cmd === 'exec') && argv[3] && /^[^-]/.test(argv[3])) {
   cmd = argv[3];
   argv = Array.prototype.slice.call(argv, 4);
   plugin.run(cmd, argv);
 } else {
+  var pluginIndex = argv.indexOf('--pluginPaths');
+  if (pluginIndex !== -1) {
+    argv[pluginIndex] = '--addon';
+  }
   program.parse(argv);
 }

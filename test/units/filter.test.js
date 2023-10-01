@@ -5,6 +5,19 @@ module.exports = function() {
     data.should.have.property('ec', 0);
   });
 
+  util.request('http://filter2.com/test.html?abc', function(res, data) {
+    data.should.have.property('ec', 123);
+  });
+
+  util.request('http://filter2.com/test.html?cba', function(res, data) {
+    data.should.have.property('ec', 333);
+  });
+
+  util.request('http://filter2.com/test.html?cb2a', function(res, data) {
+    data.should.have.property('ec', 321);
+  });
+
+
   util.request({
     url: 'https://filter.com/index.html',
     method: 'delete',
@@ -14,13 +27,25 @@ module.exports = function() {
   });
   util.request({
     url: 'https://filter.com/index.html',
-    method: 'post',
+    method: 'delete',
     body: 'test',
     headers: {
       'test': 'abc'
     }
   }, function(res, data) {
     data.should.have.property('ec', 1);
+  });
+
+  util.request({
+    url: 'https://filter.com/index.html',
+    method: 'post',
+    body: '555555',
+    headers: {
+      'test': 'abc',
+      'x-test': 'abc'
+    }
+  }, function(res, data) {
+    data.should.have.property('ec', 2);
   });
 
   util.request({

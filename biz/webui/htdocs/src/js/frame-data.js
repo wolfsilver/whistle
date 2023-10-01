@@ -5,12 +5,14 @@ var Textarea = require('./textarea');
 var FrameComposer = require('./frame-composer');
 var util = require('./util');
 var events = require('./events');
+var Properties = require('./properties');
 
 var BTNS = [
-  {name: 'TextView'},
-  {name: 'JSONView'},
-  {name: 'HexView'},
-  {name: 'Composer'}
+  { name: 'Overview' },
+  { name: 'TextView' },
+  { name: 'JSONView' },
+  { name: 'HexView' },
+  { name: 'Composer' }
 ];
 
 function findActive(btn) {
@@ -18,36 +20,58 @@ function findActive(btn) {
 }
 
 var FrameClient = React.createClass({
-  getInitialState: function() {
+  getInitialState: function () {
     return {};
   },
-  showTab: function(i) {
-    BTNS.forEach(function(btn) {
+  showTab: function (i) {
+    BTNS.forEach(function (btn) {
       btn.active = false;
     });
     this.selectBtn(BTNS[i]);
     this.setState({});
   },
-  componentDidMount: function() {
+  componentDidMount: function () {
     var self = this;
-    events.on('composeFrame', function(e, frame) {
+    events.on('composeFrame', function (e, frame) {
       if (frame) {
-        self.showTab(3);
+        self.showTab(4);
       }
     });
-    events.on('showFrameTextView', function() {
-      self.showTab(0);
+    events.on('toggleFramesInspectors', function () {
+      var btn = self.state.btn;
+      BTNS.forEach(function (b) {
+        b.active = false;
+      });
+      if (!btn || btn === BTNS[0]) {
+        self.onClickBtn(BTNS[1]);
+      } else if (btn === BTNS[1]) {
+        self.onClickBtn(BTNS[2]);
+      } else if (btn === BTNS[2]) {
+        self.onClickBtn(BTNS[3]);
+      } else {
+        self.onClickBtn(BTNS[0]);
+      }
     });
   },
-  onClickBtn: function(btn) {
+  onDragEnter: function (e) {
+    if (e.dataTransfer.types.indexOf('framedataid') != -1) {
+      this.showTab(4);
+      e.preventDefault();
+    }
+  },
+  onDrop: function (e) {
+    var id = e.dataTransfer.getData('frameDataId');
+    id && events.trigger('composeFrameId', id);
+  },
+  onClickBtn: function (btn) {
     this.selectBtn(btn);
     this.setState({});
   },
-  selectBtn: function(btn) {
+  selectBtn: function (btn) {
     btn.active = true;
     this.state.btn = btn;
   },
-  render: function() {
+  render: function () {
     var state = this.state;
     var btn = state.btn;
     if (BTNS.indexOf(btn) === -1) {
@@ -55,8 +79,29 @@ var FrameClient = React.createClass({
       this.selectBtn(btn);
     }
     var frame = this.props.frame;
-    var text, json, bin, base64;
+    var text, json, bin, base64, overview;
     if (frame) {
+      if (!frame.closed) {
+        var len = frame.length;
+        overview = {
+          Date: util.toLocaleString(new Date(parseInt(frame.frameId, 10))),
+          Path: frame.isClient ? 'Client -> Server' : 'Server -> Client',
+          Opcode: frame.opcode,
+          Type: frame.opcode == 1 ? 'Text' : 'Binary',
+          Compressed: frame.compressed ? 'Yes' : 'No',
+          Mask: frame.mask ? 'Yes' : 'No',
+          Length:
+            len >= 1024
+              ? len + '(' + Number(len / 1024).toFixed(2) + 'k)'
+              : len >= 0
+              ? len
+              : ''
+        };
+      } else {
+        overview = {
+          Date: util.toLocaleString(new Date(parseInt(frame.frameId, 10)))
+        };
+      }
       text = util.getBody(frame, true);
       bin = util.getHex(frame);
       json = util.getJson(frame, true);
@@ -64,11 +109,30 @@ var FrameClient = React.createClass({
     }
     base64 = base64 || '';
     return (
-      <div className={'fill orient-vertical-box w-frames-data' + (this.props.hide ? ' hide' : '')}>
+      <div
+        className={
+          'fill orient-vertical-box w-frames-data' +
+          (this.props.hide ? ' hide' : '')
+        }
+        onDragEnter={this.onDragEnter}
+        onDrop={this.onDrop}
+      >
         <BtnGroup onClick={this.onClickBtn} btns={BTNS} />
-        <Textarea className="fill" base64={base64} value={text} hide={btn.name !== 'TextView'} />
+        <Properties modal={overview} hide={btn.name !== 'Overview'} />
+        <Textarea
+          className="fill"
+          base64={base64}
+          value={text}
+          hide={btn.name !== 'TextView'}
+        />
         <JSONViewer data={json} hide={btn.name !== 'JSONView'} />
-        <Textarea className="fill n-monospace" isHexView="1" base64={base64} value={bin} hide={btn.name !== 'HexView'} />
+        <Textarea
+          className="fill n-monospace"
+          isHexView="1"
+          base64={base64}
+          value={bin}
+          hide={btn.name !== 'HexView'}
+        />
         <FrameComposer data={this.props.data} hide={btn.name !== 'Composer'} />
       </div>
     );

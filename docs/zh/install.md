@@ -1,6 +1,13 @@
 # 安装启动
 
-安装启动whistle，需要以下四个步骤： **安装Node**、**安装whistle**、**启动whistle**、**配置代理**。
+Mac 或 Windows 系统可以采用一键安装：https://juejin.cn/post/7096345607740063775
+
+whistle安装过程需要以下步骤(缺一不可)：
+1. **安装Node**
+2. **安装whistle**
+3. **启动whistle**
+4. **配置代理**
+5. **安装根证书**
 
 ### 1. 安装Node
 
@@ -30,11 +37,11 @@ $ npm install -g whistle
 npm默认镜像是在国外，有时候安装速度很慢或者出现安装不了的情况，如果无法安装或者安装很慢，可以使用taobao的镜像安装：
 
 ```sh
-$ npm install cnpm -g --registry=https://registry.npm.taobao.org
+$ npm install cnpm -g --registry=https://registry.npmmirror.com
 $ cnpm install -g whistle
 
 或者直接指定镜像安装：
-$ npm install whistle -g --registry=https://registry.npm.taobao.org
+$ npm install whistle -g --registry=https://registry.npmmirror.com
 ```
 
 whistle安装完成后，执行命令 `whistle help` 或 `w2 help`，查看whistle的帮助信息
@@ -90,6 +97,8 @@ $ w2 help
 
 如果能正常输出whistle的帮助信息，表示whistle已安装成功。
 
+> 有关命令行参数参见：[命令行参数](options.html)
+
 
 ### 3. 启动whistle
 
@@ -124,13 +133,13 @@ $ w2 run
 ##### 配置信息
 
 1. 代理服务器：127.0.0.1 (如果部署在远程服务器或虚拟机上，改成对应服务器或虚拟机的ip即可)
-2. 默认端口：8899 (如果端口被占用，可以在启动是时通过 `-p` 来指定新的端口，更多信息可以通过执行命令行 `w2 help` (`v0.7.0`及以上版本也可以使用`w2 help`) 查看)
+2. 默认端口：8899 (如果端口被占用，可以在启动时通过 `-p` 来指定新的端口，更多信息可以通过执行命令行 `w2 help` (`v0.7.0`及以上版本也可以使用`w2 help`) 查看)
 
 > 勾选上 **对所有协议均使用相同的代理服务器**
 
 ##### 代理配置方式(把上面配置信息配置上即可)
 
-1. 全局代理：直接配置系统代理：
+1. 全局代理 (**推荐**)，**可通过命令行设置参考[设置代理](./proxy.html)**，也可以手动配置：
   * [Windows](http://jingyan.baidu.com/article/0aa22375866c8988cc0d648c.html) 
   * [Mac](http://jingyan.baidu.com/article/a378c960849144b3282830dc.html): System Preferences > Network > Advanced > Proxies > HTTP or HTTPS
     <div>
@@ -144,7 +153,7 @@ $ w2 run
       <img src='./img/linux-proxy-2.jpg' width='48%' />
     </div>
 
-2. 浏览器代理：安装浏览器代理插件 (**推荐**)
+2. 浏览器代理 (**推荐**)：安装浏览器代理插件
 
 	* 安装Chrome代理插件：推荐安装[SwitchyOmega](https://chrome.google.com/webstore/detail/padekgcemlokbadohgkifijomclgjgif)
 
@@ -172,3 +181,6 @@ PS: 如果配置完代理，手机无法访问，可能是whistle所在的电脑
 * 方式1：域名访问 [http://local.whistlejs.com/](http://local.whistlejs.com/)
 * 方式2：通过ip+端口来访问，形式如 `http://whistleServerIP:whistlePort/` e.g. [http://127.0.0.1:8899](http://127.0.0.1:8899)
 * 方式2：通过命令行参数 `-P xxxx` 自定义webui的端口(`xxxx`表示要设置的端口号)，自定义端口支持上述两种方式访问，也支持 [http://127.0.0.1:xxxx](http://127.0.0.1:xxxx)
+
+### 5. 安装根证书
+安装证书请参考文档: [http://wproxy.org/whistle/webui/https.html](http://wproxy.org/whistle/webui/https.html)

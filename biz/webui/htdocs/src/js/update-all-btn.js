@@ -1,29 +1,27 @@
 var React = require('react');
 var events = require('./events');
 
-var DISABLED = {
-  color: '#888',
-  cursor: 'not-allowed'
-};
-
 var UpdateAllBtn = React.createClass({
-  getInitialState: function() {
+  getInitialState: function () {
     return { disabled: true };
   },
-  componentDidMount: function() {
+  componentDidMount: function () {
     var self = this;
-    events.on('setUpdateAllBtnState', function(_, hasNewPlugin) {
+    events.on('setUpdateAllBtnState', function (_, hasNewPlugin) {
       self.setState({ disabled: !hasNewPlugin });
     });
   },
-  updateAllPlugins: function() {
+  updateAllPlugins: function () {
     !this.state.disabled && events.trigger('updateAllPlugins');
   },
-  render: function() {
+  render: function () {
+    var hide = this.state.disabled || this.props.hide;
     return (
-      <a style={this.state.disabled ? DISABLED : undefined}
-        onClick={this.updateAllPlugins} className={'w-plugins-menu' +
-        (this.props.hide ? ' hide' : '')} href="javascript:;" draggable="false">
+      <a
+        onClick={this.updateAllPlugins}
+        className={'w-plugins-menu w-plugin-update-btn' + (hide ? ' hide' : '')}
+        draggable="false"
+      >
         <span className="glyphicon glyphicon-refresh" />
         UpdateAll
       </a>

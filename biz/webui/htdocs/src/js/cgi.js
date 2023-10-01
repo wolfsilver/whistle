@@ -1,17 +1,20 @@
 var $ = require('jquery');
+var util = require('./util');
+
+var auth = util.getQuery().authorization;
 
 function createCgi(url, settings) {
   var self = this;
   if (typeof url == 'string') {
-    url = {url: url};
+    url = { url: url };
   }
-  settings = $.extend({dataType: 'json'}, settings, url);
+  settings = $.extend({ dataType: 'json' }, settings, url);
   url = url.url;
   var queue = [];
   var jqXhr;
 
   function cgiFn(data, callback, options) {
-    var opts = {url: typeof url == 'function' ? url() : url};
+    var opts = { url: typeof url == 'function' ? url() : url };
     if (typeof data == 'function') {
       options = callback;
       callback = data;
@@ -33,20 +36,24 @@ function createCgi(url, settings) {
       }
     }
 
-    var execCallback = function(data, xhr, em) {
+    var execCallback = function (data, xhr, em) {
       jqXhr = null;
       callback && callback.call(this, data, xhr, em);
       var args = queue.shift();
       args && cgiFn.apply(self, args);
     };
-    options.success = function(data, statusText, xhr) {
+    options.success = function (data, statusText, xhr) {
       execCallback.call(this, data, xhr);
     };
-    options.error = function(xhr, em) {
+    options.error = function (xhr, em) {
       execCallback.call(this, false, xhr, em);
     };
-
-    return (jqXhr = $.ajax(options));
+    opts = options;
+    if (auth && typeof opts.url === 'string') {
+      opts = $.extend({}, opts);
+      opts.url += (opts.url.indexOf('?') === -1 ? '?' : '&') + 'authorization=' + auth;
+    }
+    return (jqXhr = $.ajax(opts));
   }
 
   return cgiFn;
@@ -54,7 +61,7 @@ function createCgi(url, settings) {
 
 function create(obj, settings) {
   var cgi = {};
-  Object.keys(obj).forEach(function(name) {
+  Object.keys(obj).forEach(function (name) {
     cgi[name] = createCgi(obj[name], settings);
   });
   return cgi;

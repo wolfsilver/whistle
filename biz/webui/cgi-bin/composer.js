@@ -1,45 +1,46 @@
 var http = require('http');
+var gzip = require('zlib').gzip;
+var tls = require('tls');
+var crypto = require('crypto');
+var Buffer = require('safe-buffer').Buffer;
+var extend = require('extend');
+var common = require('../../../lib/util/common');
 var config = require('../../../lib/config');
 var util = require('../../../lib/util');
 var zlib = require('../../../lib/util/zlib');
 var properties = require('../../../lib/rules/util').properties;
 var getSender = require('ws-parser').getSender;
 var hparser = require('hparser');
+var sendGzip = require('./util').sendGzip;
 
 var formatHeaders = hparser.formatHeaders;
 var getRawHeaders = hparser.getRawHeaders;
-var STATUS_CODE_RE = /^\S+\s+(\d+)/i;
+var getRawHeaderNames = hparser.getRawHeaderNames;
+var parseReq = hparser.parse;
 var MAX_LENGTH = 1024 * 512;
+var MAX_REQ_COUNT = 100;
+var TLS_PROTOS = 'https:,wss:,tls:'.split(',');
 var PROXY_OPTS = {
-  host: '127.0.0.1',
+  host: config.host || '127.0.0.1',
   port: config.port
 };
 
-function parseHeaders(headers, rawHeaderNames) {
-  if (!headers || typeof headers != 'string') {
+function parseHeaders(headers, rawHeaderNames, clientId) {
+  var type = headers && typeof headers;
+  if (type != 'string' && type !== 'object') {
     return {};
   }
 
-  var reqHeaders = util.parseRawJson(headers);
+  var reqHeaders = type === 'object' ? headers : util.parseRawJson(headers);
   if (reqHeaders) {
-    return util.lowerCaseify(reqHeaders, rawHeaderNames);
+    reqHeaders = util.lowerCaseify(reqHeaders, rawHeaderNames);
+  } else {
+    reqHeaders = util.parseHeaders(headers, rawHeaderNames);
   }
-
-  return util.parseHeaders(headers, rawHeaderNames);
-}
-
-function isWebSocket(options) {
-  var p = options.protocol;
-  return p === 'ws:' || p === 'wss:' || options.method === 'UPGRADE';
-}
-
-var crypto = require('crypto');
-function isConnect(options) {
-  if (options.method === 'CONNECT') {
-    return true;
+  if (clientId && reqHeaders[config.CLIENT_ID_HEADER] !== clientId) {
+    reqHeaders[config.COMPOSER_CLIENT_ID_HEADER] = clientId;
   }
-  var p = options.protocol;
-  return p === 'connect:' || p === 'socket:' || p === 'tunnel:' || p === 'conn:';
+  return reqHeaders;
 }
 
 function drain(socket) {
@@ -47,27 +48,53 @@ function drain(socket) {
   socket.on('data', util.noop);
 }
 
-function handleConnect(options, cb) {
+function getReqCount(count) {
+  return count > 0 ? Math.min(count, MAX_REQ_COUNT) : 1;
+}
+
+function handleConnect(options, cb, count) {
+  count = getReqCount(count);
   options.headers['x-whistle-policy'] = 'tunnel';
-  config.connect({
-    host: options.hostname,
-    port: options.port || 443,
-    proxyHost: '127.0.0.1',
-    proxyPort: config.port,
-    headers: options.headers
-  }, function(socket, res, err) {
-    drain(socket);
-    var data = util.toBuffer(options.body, getCharset(options.headers));
-    if (data && data.length) {
-      socket.write(data);
+  var origOpts = options;
+  var lastIndex = count - 1;
+  for (var i = 0; i < count; i++) {
+    var execCb;
+    if (i === lastIndex) {
+      execCb = cb;
+    } else {
+      options = extend({}, origOpts);
     }
-    if (cb) {
-      cb(err);
-      util.onSocketEnd(socket, function(err) {
-        cb(err || new Error('Closed'));
+    config.connect({
+      host: options.hostname,
+      port: options.port || 443,
+      proxyHost: PROXY_OPTS.host,
+      proxyPort: PROXY_OPTS.port,
+      headers: options.headers
+    }, function(socket, svrRes, err) {
+      if (err) {
+        return execCb && execCb(err);
+      }
+      if (!err) {
+        if (TLS_PROTOS.indexOf(options.protocol) !== -1) {
+          socket = tls.connect({
+            rejectUnauthorized: config.rejectUnauthorized,
+            socket: socket,
+            servername: options.hostname
+          });
+        }
+        drain(socket);
+        var data = options.body;
+        if (data && data.length) {
+          socket.write(data);
+          options.body = data = null;
+        }
+      }
+      execCb && execCb(null, {
+        statusCode: svrRes.statusCode,
+        headers: svrRes.headers
       });
-    }
-  }).on('error', cb || util.noop);
+    }).on('error', execCb || util.noop);
+  }
 }
 
 function getReqRaw(options) {
@@ -77,93 +104,124 @@ function getReqRaw(options) {
   return raw.join('\r\n') + '\r\n\r\n';
 }
 
-function handleWebSocket(options, cb) {
+function handleWebSocket(options, cb, count) {
+  count = getReqCount(count);
   if (options.protocol === 'https:' || options.protocol === 'wss:') {
     options.headers[config.HTTPS_FIELD] = 1;
   }
   var binary = !!options.headers['x-whistle-frame-binary'];
   delete options.headers['x-whistle-frame-binary'];
-  util.connect(PROXY_OPTS, function(err, socket) {
-    if (err) {
-      cb && cb(err);
+  var origOpts = options;
+  var lastIndex = count - 1;
+  for (var i = 0; i < count; i++) {
+    var execCb;
+    if (i === lastIndex) {
+      execCb = cb;
     } else {
-      socket.write(getReqRaw(options));
-      var handleResponse = function(resData) {
-        resData = resData + '';
-        var index = resData.indexOf('\r\n\r\n');
-        var body = '';
-        if (index !== -1) {
-          socket.removeListener('data', handleResponse);
-          socket.headers = parseHeaders(resData.slice(0, index));
-          body = resData.slice(index + 4).toString();
-          var sender = getSender(socket);
-          var data = util.toBuffer(options.body, getCharset(socket.headers) || getCharset(options.headers));
-          if (data && data.length) {
-            sender.send(data, {
-              mask: true,
-              binary: binary
-            }, util.noop);
-          }
+      options = extend({}, origOpts);
+    }
+    util.connect(PROXY_OPTS, function(err, socket) {
+      if (err) {
+        execCb && execCb(err);
+      } else {
+        socket.write(getReqRaw(options));
+        var data = options.body;
+        if ((!data || !data.length) && !cb) {
+          return drain(socket);
         }
-        if (cb) {
-          var statusCode = 0;
-          if (STATUS_CODE_RE.test(resData)) {
-            statusCode = parseInt(RegExp.$1, 10);
+        parseReq(socket, function(e) {
+          if (e) {
+            socket.destroy();
+            return execCb && execCb(e);
           }
-          if (statusCode !== 101) {
+          var statusCode = socket.statusCode;
+          if (statusCode == 101) {
+            if (data) {
+              if (common.isWebSocket(socket.headers)) {
+                getSender(socket).send(data, {
+                  mask: true,
+                  binary: binary
+                }, util.noop);
+              } else {
+                socket.write(data);
+              }
+              options.body = data = null;
+            }
+            socket.body = '';
+            drain(socket);
+          } else {
             socket.destroy();
           }
-          cb(null, {
+          execCb && execCb(null, {
             statusCode: statusCode,
             headers: socket.headers || {},
-            body: body
+            body: socket.body || ''
           });
-        }
-      };
-      socket.on('data', handleResponse);
-      if (cb) {
-        util.onSocketEnd(socket, function(err) {
-          cb(err || new Error('Closed'));
-        });
+        }, true);
       }
-      drain(socket);
-    }
-  });
+    });
+  }
 }
 
-function handleHttp(options, cb) {
+function handleHttp(options, cb, count) {
+  count = getReqCount(count);
   if (options.protocol === 'https:') {
     options.headers[config.HTTPS_FIELD] = 1;
   }
   options.protocol = null;
   options.hostname = null;
-  options.host = '127.0.0.1';
-  options.port = config.port;
-  http.request(options, function(res) {
-    if (cb) {
-      res.on('error', cb);
-      var buffer;
-      res.on('data', function(data) {
-        if (buffer !== null) {
-          buffer = buffer ? Buffer.concat([buffer, data]) : data;
-          if (buffer.length > MAX_LENGTH) {
-            buffer = null;
+  options.host = PROXY_OPTS.host;
+  options.port = PROXY_OPTS.port;
+  var origOpts = options;
+  var lastIndex = count - 1;
+  for (var i = 0; i < count; i++) {
+    var execCb;
+    if (i === lastIndex) {
+      execCb = cb;
+    } else {
+      options = extend({}, origOpts);
+    }
+    var client = http.request(options, function(res) {
+      if (execCb) {
+        res.on('error', execCb);
+        var buffer;
+        res.on('data', function(data) {
+          if (buffer !== null) {
+            buffer = buffer ? Buffer.concat([buffer, data]) : data;
+            if (buffer.length > MAX_LENGTH) {
+              buffer = null;
+            }
           }
-        }
-      });
-      res.on('end', function() {
-        zlib.unzip(res.headers['content-encoding'], buffer, function(err, body) {
-          cb(null, {
-            statusCode: res.statusCode,
-            headers: res.headers,
-            body: err ? err.stack : util.decodeBuffer(body)
+        });
+        res.on('end', function() {
+          zlib.unzip(res.headers['content-encoding'], buffer, function(err, body) {
+            var headers = res.headers;
+            if (typeof headers.trailer === 'string' && headers.trailer.indexOf(',') !== -1) {
+              headers.trailer = headers.trailer.split(',');
+            }
+            var result = {
+              statusCode: res.statusCode,
+              headers: headers,
+              trailers: res.trailers,
+              rawHeaderNames: getRawHeaderNames(res.rawHeaders),
+              rawTrailerNames: getRawHeaderNames(res.rawTrailers)
+            };
+            if (err) {
+              result.body = err.stack;
+            } else if (body) {
+              result.base64 = body.toString('base64');
+            }
+            execCb(null, result);
           });
         });
-      });
-    } else {
-      drain(res);
-    }
-  }).on('error', cb || util.noop).end(options.body);
+      } else {
+        drain(res);
+      }
+    });
+    client.on('error', execCb || util.noop);
+    client.end(options.body);
+    options.body = null;
+  }
 }
 
 function getCharset(headers) {
@@ -186,86 +244,117 @@ module.exports = function(req, res) {
   if (protocol) {
     options.protocol = protocol = protocol.toLowerCase();
   }
-  properties.addHistory(req.body);
   var rawHeaderNames = {};
-  var headers = parseHeaders(req.body.headers, rawHeaderNames);
+  var clientId = req.headers[config.CLIENT_ID_HEADER];
+  var headers = parseHeaders(req.body.headers, rawHeaderNames, clientId);
+  var method = util.getMethod(req.body.method);
+  var isWebSocket = method === 'WEBSOCKET';
   delete headers[config.WEBUI_HEAD];
-  headers[config.WHISTLE_REQ_FROM_HEADER] = 'W2COMPOSER';
+  headers[config.REQ_FROM_HEADER] = 'W2COMPOSER';
   headers.host = options.host;
+  options.clientId = clientId;
   var clientIp = util.getClientIp(req);
   if (!util.isLocalAddress(clientIp)) {
     headers[config.CLIENT_IP_HEAD] = clientIp;
   }
   headers[config.CLIENT_PORT_HEAD] = util.getClientPort(req);
-  options.method = util.getMethod(req.body.method);
+  options.method = method;
 
-  var isConn = isConnect(options);
-  var isWs = !isConn && (isWebSocket(options)
-    || (/^\s*upgrade\s*$/i.test(headers.connection) && /^\s*websocket\s*$/i.test(headers.upgrade)));
+  var isConn = common.isConnect(options);
+  var isWs = !isConn && (isWebSocket || common.isUpgrade(options, headers));
+  var useH2 = req.body.useH2 || req.body.isH2;
+  req.body.useH2 = false;
   if (isWs) {
     headers.connection = 'Upgrade';
-    headers.upgrade = 'websocket';
+    headers.upgrade = (!isWebSocket && headers.upgrade) || 'websocket';
     headers['sec-websocket-version'] = 13;
-    headers['sec-websocket-key'] = crypto.randomBytes(16).toString('base64');
+    if (isWebSocket || common.isWebSocket(headers)) {
+      headers['sec-websocket-key'] = crypto.randomBytes(16).toString('base64');
+    }
   } else {
     headers.connection = 'close';
     delete headers.upgrade;
-    if (!isConn && ((req.body.useH2 && protocol === 'https:') || protocol === 'h2:' || protocol === 'http2:')) {
-      options.protocol = protocol = 'https:';
-      headers[config.ALPN_PROTOCOL_HEADER] = 'h2';
+    if (!isConn && ((useH2 && (protocol === 'https:' || protocol === 'http:')) || protocol === 'h2:' || protocol === 'http2:')) {
+      req.body.useH2 = true;
+      var isHttp = protocol === 'http:';
+      options.protocol = isHttp ? 'http:' : 'https:';
+      headers[config.ALPN_PROTOCOL_HEADER] = isHttp ? 'httpH2' : 'h2';
     }
   }
+  !req.body.noStore && properties.addHistory(req.body);
 
-  var base64 = req.body.base64;
-  var body = base64 || req.body.body;
-  if (body && (isWs || isConn || util.hasRequestBody(options))) {
-    body = util.toBuffer(body, base64 ? 'base64' : getCharset(headers));
-    options.body = body;
-    if ('content-length' in headers) {
-      if (isWs || isConn) {
-        delete headers['content-length'];
-      } else {
-        headers['content-length'] = body ? body.length : '0';
+  var getBody = function(cb) {
+    var base64 = req.body.base64;
+    var body = base64 || req.body.body;
+    if (!isWs) {
+      delete headers.trailer;
+    }
+    if (isWs || isConn || util.hasRequestBody(options)) {
+      body = body && util.toBuffer(body, base64 ? 'base64' : getCharset(headers));
+      options.body = body;
+      if (!isWs && !isConn && body && req.body.isGzip) {
+        gzip(body, function(err, gzipData) {
+          if (err) {
+            return cb(err);
+          }
+          headers['content-encoding'] = 'gzip';
+          if ('content-length' in headers) {
+            headers['content-length'] = gzipData.length;
+          } else {
+            delete headers['content-length'];
+          }
+          options.body = gzipData;
+          cb();
+        });
+        return;
       }
+      if ('content-length' in headers) {
+        if (isWs || isConn) {
+          delete headers['content-length'];
+        } else {
+          headers['content-length'] = body ? body.length : '0';
+        }
+      }
+    } else {
+      delete headers['content-length'];
     }
-  } else {
-    delete headers['content-length'];
-  }
-  delete headers['content-encoding'];
-  options.headers = formatHeaders(headers, rawHeaderNames);
-  var done;
-  var needResponse = req.query.needResponse || req.body.needResponse;
-  var handleResponse = needResponse ? function(err, data) {
-    if (done) {
-      return;
-    }
-    done = true;
+    delete headers['content-encoding'];
+    cb();
+  };
+  getBody(function(err) {
+    options.headers = formatHeaders(headers, rawHeaderNames);
+    var done;
+    var needResponse = req.query.needResponse || req.body.needResponse;
+    var handleResponse = needResponse ? function(err, data) {
+      if (done) {
+        return;
+      }
+      done = true;
+      if (err) {
+        res.json({ec: 0, res: {
+          statusCode:  err.statusCode ? parseInt(err.statusCode, 10) : 502,
+          headers: '',
+          body: err.stack
+        }});
+        return;
+      }
+      sendGzip(req, res, {ec: 0, em: 'success', res: data || ''});
+    } : null;
     if (err) {
-      res.json({ec: 0, res: {
-        statusCode:  err.statusCode ? parseInt(err.statusCode, 10) : 502,
-        headers: '',
-        body: err.stack
-      }});
-      return;
+      return handleResponse && handleResponse(err);
     }
-    res.json({ec: 0, em: 'success', res: data || ''});
-  } : null;
-  if (isWs) {
-    options.method = 'GET';
-    if (handleResponse) {
-      return handleWebSocket(options, handleResponse);
+    var count = req.body.repeatCount;
+    count = count > 0 ? count : req.body.repeatTimes;
+    if (isWs) {
+      options.method = 'GET';
+      handleWebSocket(options, handleResponse, count);
+    } else if (isConn) {
+      handleConnect(options, handleResponse, count);
+    } else  {
+      handleHttp(options, handleResponse, count);
     }
-    handleWebSocket(options);
-  } else if (isConn) {
-    if (handleResponse) {
-      return handleConnect(options, handleResponse);
+    if (!handleResponse) {
+      res.json({ec: 0, em: 'success'});
     }
-    handleConnect(options);
-  } else  {
-    if (handleResponse) {
-      return handleHttp(options, handleResponse);
-    }
-    handleHttp(options);
-  }
-  res.json({ec: 0, em: 'success'});
+  });
 };

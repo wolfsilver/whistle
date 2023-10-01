@@ -1,12 +1,8 @@
 # Https
 
-> 建议使用 `Node v6` 或以上版本，否则会存在性能问题，及在Chrome或APP上抓包HTTPS请求会有问题。
+下载根证书，开启捕获HTTPS请求：
 
-> **在iOS上安装根证书时，需要先关闭`HTTPS拦截`，否则将显示安装失败。**
-
-用来下载根证书、隐藏`connect`类型的请求、开启HTTPS拦截功能。
-
-![Https](../img/https.gif)
+![Https](https://user-images.githubusercontent.com/11450939/83850712-e384cc80-a743-11ea-9cf4-c5c3f4cbf0c8.png)
 
 ## 安装根证书
 > 证书按下面步骤安装后，如果还出现安全提醒，这个主要原因是之前你访问过该页面，导致长连接已建立，可以等段时间再访问、或重新打开浏览器，或重启下whistle： `w2 restart`
@@ -20,6 +16,7 @@
   ![img](../img/windows_rootca.jpeg)
 
   下载证书后，双击证书，根据指引安装证书。证书安装过程，要确保证书存储到`受信任的根证书颁发机构`下。
+  
 2. Mac: [Mac根证书怎么安装](http://zhidao.baidu.com/link?url=bQ8ZnDTxUIlqruQ56NYjBmwztWPlZtv9AIRazkoKeMsdpAq7mcwXOHQduRwmHV1M2hf143vqBxHzKb1tg0L03DJoj6XS109P8zBNF1E9uU_)
 
   Mac 安装证书后，需要手动信任证书，步骤如下：
@@ -34,16 +31,28 @@
   以看到证书上面红色的图标 `x` 不见了，到这一步说明完成证书安装。
 
   ![img](https://ae01.alicdn.com/kf/HTB1UWItd8USMeJjy1zk761WmpXaT.png)
-3. Firefox:
+  
+3. Linux:
+
+  Linux 安装较为复杂，根据发行版本的不同，安装位置可能略有变化，以下是一些常用发行版的安装方法：
+  
+  - ArchLinux: 将下载的 rootCA.crt 复制到 `/etc/ca-certificates/trust-source/anchors/` 然后执行 `trust extract-compat`
+  - Fedora: 将下载的 rootCA.crt 复制到 `/etc/pki/ca-trust/source/anchors` 然后执行 `trust extract-compat`
+  - Ubuntu/Debian: 将下载的 rootCA.crt 复制到 `/usr/share/ca-certificates/` 然后执行 `echo "rootCA.crt" >> /etc/ca-certificates.conf && update-ca-certificates`
+  
+  如果成功安装，命令 `trust list | grep -i whistle` 输出不为空。
+
+5. Firefox:
 
   菜单 > 首选项 > 高级 > 证书 > 证书机构 > 导入 -> 选中所有checkbox -> 确定
-4. Linux Chrome(Chromium): 参照这个[教程](http://www.richud.com/wiki/Ubuntu_chrome_browser_import_self_signed_certificate)
+  
+  ![ubuntu Chromium](https://cloud.githubusercontent.com/assets/16034964/20553721/9c3d1bda-b191-11e6-880f-9fd6976b95cc.png)
+4. Linux Chrome(Chromium):
   * 地址栏输入`chrome://settings/`
   * Show advanced Settings > Manage certificates > Authorities > Import
   * 选择证书后确认，重启浏览器
   * done
-
-  ![ubuntu Chromium](https://cloud.githubusercontent.com/assets/16034964/20553721/9c3d1bda-b191-11e6-880f-9fd6976b95cc.png)
+  > 详细内容参照这个[教程](http://www.richud.com/wiki/Ubuntu_chrome_browser_import_self_signed_certificate)
 5. 手机
 
   **iOS**
@@ -72,7 +81,7 @@
 
 图中的打开的对话框有个checkbox：
 
-1.`Capture HTTPS CONNECTs`：开启Https拦截功能，只有勾上这个checkbox及装好根证书，whistle才能看到HTTPS、Websocket的请求
+1.`Capture HTTPS CONNECTS`：开启Https拦截功能，只有勾上这个checkbox及装好根证书，whistle才能看到HTTPS、Websocket的请求
 2. 也可以通过配置来开启对部分请求的Https拦截功能
   ```plain
   www.test.com enable://intercept

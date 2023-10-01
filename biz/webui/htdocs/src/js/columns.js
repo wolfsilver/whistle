@@ -1,39 +1,30 @@
 var $ = require('jquery');
 var dataCenter = require('./data-center');
-var util = require('./util');
+var events = require('./events');
 var storage = require('./storage');
+var util = require('./util');
 
 var settings = dataCenter.getNetworkColumns();
+var sortedCols = Array.isArray(settings.columns) ? settings.columns : [];
+var pluginColList = dataCenter.getPluginColumns();
 
-var minWidth = storage.get('minNetworkWidth');
-if (minWidth) {
-  storage.set('minNetworkWidth', parseInt(minWidth, 10) || '');
-}
-
-exports.getMinWidth = function() {
-  return storage.get('minNetworkWidth');
-};
-
-exports.setMinWidth = function(width) {
-  storage.set('minNetworkWidth', width);
-};
+var pluginColsMap = {};
 
 function getDefaultColumns() {
-
   return [
     {
       title: 'Date',
       name: 'date',
       className: 'date',
       showTitle: true,
-      width: 150
+      width: 160
     },
     {
       title: 'Result',
       name: 'result',
       className: 'result',
       selected: true,
-      width: 65
+      width: 75
     },
     {
       title: 'Method',
@@ -48,6 +39,7 @@ function getDefaultColumns() {
       name: 'protocol',
       className: 'protocol',
       selected: true,
+      showTitle: true,
       width: 95
     },
     {
@@ -75,8 +67,7 @@ function getDefaultColumns() {
       title: 'ServerPort',
       name: 'serverPort',
       className: 'serverPort',
-      width: 90,
-      lazy: true
+      width: 90
     },
     {
       title: 'Host',
@@ -92,7 +83,6 @@ function getDefaultColumns() {
       className: 'path',
       selected: true,
       locked: true,
-      lazy: true,
       minWidth: 60
     },
     {
@@ -101,22 +91,20 @@ function getDefaultColumns() {
       className: 'type',
       selected: true,
       showTitle: true,
-      width: 125,
-      lazy: true
+      width: 125
     },
     {
       title: 'Body',
+      showTitle: true,
       name: 'body',
       className: 'body',
-      width: 90,
-      lazy: true
+      width: 90
     },
     {
       title: 'Encoding',
       name: 'contentEncoding',
       className: 'contentEncoding',
-      width: 90,
-      lazy: true
+      width: 90
     },
     {
       title: 'DNS',
@@ -134,69 +122,123 @@ function getDefaultColumns() {
       title: 'Response',
       name: 'response',
       className: 'response',
-      width: 90,
-      lazy: true
+      width: 90
     },
     {
       title: 'Download',
       name: 'download',
       className: 'download',
-      width: 90,
-      lazy: true
+      width: 90
     },
     {
       title: 'Time',
       name: 'time',
       className: 'time',
       selected: true,
-      width: 70,
-      lazy: true
+      width: 70
+    },
+    {
+      title: 'Custom1',
+      name: 'custom1',
+      className: 'custom1',
+      showTitle: true,
+      width: 120
+    },
+    {
+      title: 'Custom2',
+      name: 'custom2',
+      className: 'custom2',
+      showTitle: true,
+      width: 160
     }
   ];
 }
 
 var columnsMap;
 var curColumns;
+var buildInCols;
+var colWidthData;
 
-function reset() {
-  columnsMap = {};
-  curColumns = getDefaultColumns();
-  curColumns.forEach(function(col) {
+function updateColumns(reseted, init) {
+  buildInCols = buildInCols || getDefaultColumns();
+  curColumns = buildInCols.concat(pluginColList);
+  curColumns.forEach(function (col) {
+    var menus = [];
+    var curWidth = colWidthData[col.name];
+    var hasSelected;
+    var width = col.minWidth || col.width;
+    var icon = col.minWidth ? '>= ' : '';
+    var round = width % 2 ? 5 : 0;
+    for (var i = 0; i < 11; i++) {
+      var w = width + i * 60 + round;
+      var selected = curWidth === w;
+      hasSelected = hasSelected || selected;
+      if (i) {
+        menus.push({ name: icon + w + 'px', action: w, selected: selected });
+      } else {
+        menus.push({ name: icon + width + 'px (Default)', action: w, selected: selected });
+      }
+    }
     columnsMap[col.name] = col;
+    col.menus = menus;
+    if (!hasSelected) {
+      menus[0].selected = true;
+      colWidthData[col.name] = menus[0].action;
+    }
   });
+  if (reseted) {
+    sortedCols = curColumns;
+  }
+  sortColumns(init);
 }
 
-reset();
-if (Array.isArray(settings.columns)) {
-  var flagMap = {};
-  var checkColumn = function(col) {
-    var name = col && col.name;
-    if (!name || flagMap[name] || !columnsMap[name]) {
-      return false;
-    }
-    flagMap[name] = 1;
-    return true;
-  };
-  var columns = settings.columns.filter(checkColumn);
-  if (columns.length === curColumns.length) {
-    curColumns = columns.map(function(col) {
-      var curCol = columnsMap[col.name];
-      curCol.selected = !!col.selected;
-      return curCol;
-    });
+function reset(init) {
+  columnsMap = {};
+  if (init) {
+    try {
+      colWidthData = JSON.parse(storage.get('networkColumnsWidth'));
+    } catch (e) {}
+    colWidthData = colWidthData || {};
+  } else {
+    buildInCols = null;
+    colWidthData = {};
+  }
+  updateColumns(!init, init);
+  if (!init) {
+    save();
+    storage.set('networkColumnsWidth');
   }
 }
 
-settings = {
-  columns: curColumns
-};
+function sortColumns(init) {
+  var columns = [];
+  sortedCols.forEach(function(col) {
+    var name = col && col.name;
+    var curCol = name && columnsMap[name];
+    if (init && curCol) {
+      curCol.selected = !!col.selected;
+    }
+    if (curCol && curColumns.indexOf(curCol) !== -1 && columns.indexOf(curCol) === -1) {
+      columns.push(curCol);
+    }
+  });
+  curColumns.forEach(function(col) {
+    if (columns.indexOf(col) === -1) {
+      columns.push(col);
+    }
+  });
+  curColumns = columns;
+  settings = { columns: curColumns };
+}
+
+reset(true);
 
 function save() {
   settings.columns = curColumns;
   dataCenter.setNetworkColumns(settings);
 }
 
-exports.getColumn = function(name) {
+exports.getColumn = function (name) {
   return columnsMap[name];
 };
 
@@ -216,26 +258,22 @@ function moveTo(name, targetName) {
   save();
 }
 
-exports.getAllColumns = function() {
+exports.getAllColumns = function () {
   return curColumns;
 };
-exports.reset = function() {
-  storage.set('minNetworkWidth', '');
-  reset();
-  save();
-};
-exports.setSelected = function(name, selected) {
+exports.reset = reset;
+exports.setSelected = function (name, selected) {
   var col = columnsMap[name];
   if (col) {
     col.selected = selected !== false;
     save();
   }
 };
-exports.getSelectedColumns = function() {
+exports.getSelectedColumns = function () {
   var width = 50;
-  var list = curColumns.filter(function(col) {
-    if (col.selected || col.locked) {
-      width += col.width || col.minWidth;
+  var list = curColumns.filter(function (col) {
+    if (col.selected || col.locked || col.isPlugin) {
+      width += colWidthData[col.name] || col.width || col.minWidth;
       return true;
     }
   });
@@ -280,7 +318,7 @@ function getDragInfo(e) {
 }
 
 function getNameFromTypes(e) {
-  var type = util.findArray(e.dataTransfer.types, function(type) {
+  var type = util.findArray(e.dataTransfer.types, function (type) {
     if (type.indexOf(COLUMN_TYPE_PREFIX) === 0) {
       return true;
     }
@@ -288,36 +326,35 @@ function getNameFromTypes(e) {
   return type && type.substring(COLUMN_TYPE_PREFIX.length);
 }
 
-$(document).on('drop', function() {
+$(document).on('drop', function () {
   if (curTarget) {
     curTarget.style.background = '';
   }
   curTarget = null;
 });
 
-exports.getDragger = function() {
-
+exports.getDragger = function () {
   return {
-    onDragStart: function(e) {
+    onDragStart: function (e) {
       var target = getTarget(e);
       var name = target && target.getAttribute('data-name');
       e.dataTransfer.setData(COLUMN_TYPE_PREFIX + name, 1);
       e.dataTransfer.setData('-' + COLUMN_TYPE_PREFIX, name);
     },
-    onDragEnter: function(e) {
+    onDragEnter: function (e) {
       var info = getDragInfo(e);
       if (info) {
         curTarget = info.target;
         curTarget.style.background = '#ddd';
       }
     },
-    onDragLeave: function(e) {
+    onDragLeave: function (e) {
       var info = getDragInfo(e);
       if (info) {
         info.target.style.background = '';
       }
     },
-    onDrop: function(e) {
+    onDrop: function (e) {
       var info = getDragInfo(e);
       if (info) {
         var fromName = e.dataTransfer.getData('-' + COLUMN_TYPE_PREFIX);
@@ -330,3 +367,30 @@ exports.getDragger = function() {
     }
   };
 };
+
+exports.setWidth = function(name, width) {
+  colWidthData[name] = parseInt(width);
+  storage.set('networkColumnsWidth', JSON.stringify(colWidthData));
+};
+
+exports.getWidth = function(col) {
+  return colWidthData[col.name] || col.width || col.minWidth;
+};
+
+events.on('pluginColumnsChange', function() {
+  var map = {};
+  pluginColList = dataCenter.getPluginColumns().map(function(col) {
+    map[col.name] = col;
+    var oldCol = pluginColsMap[col.name];
+    if (oldCol) {
+      oldCol.title = col.title;
+      oldCol.key = col.key;
+      oldCol.width = col.width;
+      return oldCol;
+    }
+    return col;
+  });
+  pluginColsMap = map;
+  updateColumns();
+  events.trigger('onColumnsChanged');
+});

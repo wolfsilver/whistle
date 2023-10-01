@@ -16,7 +16,9 @@ var _keys2 = _interopRequireDefault(_keys);
 
 exports['default'] = getCollectionEntries;
 
-function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { 'default': obj }; }
+function _interopRequireDefault(obj) {
+  return obj && obj.__esModule ? obj : { default: obj };
+}
 
 function getLength(type, collection) {
   if (type === 'Object') {
@@ -33,16 +35,20 @@ function isIterableMap(collection) {
 }
 
 function getEntries(type, collection, sortObjectKeys) {
-  var from = arguments.length > 3 && arguments[3] !== undefined ? arguments[3] : 0;
-  var to = arguments.length > 4 && arguments[4] !== undefined ? arguments[4] : Infinity;
+  var from =
+    arguments.length > 3 && arguments[3] !== undefined ? arguments[3] : 0;
+  var to =
+    arguments.length > 4 && arguments[4] !== undefined
+      ? arguments[4]
+      : Infinity;
 
   var res = void 0;
 
   if (type === 'Object') {
     var keys = (0, _getOwnPropertyNames2['default'])(collection);
 
-    if (typeof sortObjectKeys !== 'undefined') {
-      keys.sort(sortObjectKeys);
+    if (sortObjectKeys) {
+      keys.sort(sortObjectKeys === true ? undefined : sortObjectKeys);
     }
 
     keys = keys.slice(from, to + 1);
@@ -53,9 +59,12 @@ function getEntries(type, collection, sortObjectKeys) {
       })
     };
   } else if (type === 'Array') {
+    var oidx = collection._idx;
     res = {
       entries: collection.slice(from, to + 1).map(function (val, idx) {
-        return { key: idx + from, value: val };
+        idx += from;
+        var i = oidx && oidx[idx];
+        return { key: i >= 0 ? i : idx, value: val };
       })
     };
   } else {
@@ -65,7 +74,16 @@ function getEntries(type, collection, sortObjectKeys) {
 
     var isMap = isIterableMap(collection);
 
-    for (var _iterator = collection, _isArray = Array.isArray(_iterator), _i = 0, _iterator = _isArray ? _iterator : (0, _getIterator3['default'])(_iterator);;) {
+    for (
+      var _iterator = collection,
+        _isArray = Array.isArray(_iterator),
+        _i = 0,
+        _iterator = _isArray
+          ? _iterator
+          : (0, _getIterator3['default'])(_iterator);
+      ;
+
+    ) {
       var _ref;
 
       if (_isArray) {
@@ -82,15 +100,19 @@ function getEntries(type, collection, sortObjectKeys) {
       if (idx > to) {
         done = false;
         break;
-      }if (from <= idx) {
+      }
+      if (from <= idx) {
         if (isMap && Array.isArray(item)) {
           if (typeof item[0] === 'string' || typeof item[0] === 'number') {
             entries.push({ key: item[0], value: item[1] });
           } else {
-            entries.push({ key: '[entry ' + idx + ']', value: {
+            entries.push({
+              key: '[entry ' + idx + ']',
+              value: {
                 '[key]': item[0],
                 '[value]': item[1]
-              } });
+              }
+            });
           }
         } else {
           entries.push({ key: idx, value: item });
@@ -121,8 +143,12 @@ function getRanges(from, to, limit) {
 }
 
 function getCollectionEntries(type, collection, sortObjectKeys, limit) {
-  var from = arguments.length > 4 && arguments[4] !== undefined ? arguments[4] : 0;
-  var to = arguments.length > 5 && arguments[5] !== undefined ? arguments[5] : Infinity;
+  var from =
+    arguments.length > 4 && arguments[4] !== undefined ? arguments[4] : 0;
+  var to =
+    arguments.length > 5 && arguments[5] !== undefined
+      ? arguments[5]
+      : Infinity;
 
   var getEntriesBound = getEntries.bind(null, type, collection, sortObjectKeys);
 
@@ -146,12 +172,20 @@ function getCollectionEntries(type, collection, sortObjectKeys, limit) {
   var limitedEntries = void 0;
   if (type === 'Iterable') {
     var _getEntriesBound = getEntriesBound(from, from + limit - 1),
-        hasMore = _getEntriesBound.hasMore,
-        entries = _getEntriesBound.entries;
+      hasMore = _getEntriesBound.hasMore,
+      entries = _getEntriesBound.entries;
 
-    limitedEntries = hasMore ? [].concat(entries, getRanges(from + limit, from + 2 * limit - 1, limit)) : entries;
+    limitedEntries = hasMore
+      ? [].concat(entries, getRanges(from + limit, from + 2 * limit - 1, limit))
+      : entries;
   } else {
-    limitedEntries = isSubset ? getRanges(from, to, limit) : [].concat(getEntriesBound(0, limit - 5).entries, getRanges(limit - 4, length - 5, limit), getEntriesBound(length - 4, length - 1).entries);
+    limitedEntries = isSubset
+      ? getRanges(from, to, limit)
+      : [].concat(
+          getEntriesBound(0, limit - 5).entries,
+          getRanges(limit - 4, length - 5, limit),
+          getEntriesBound(length - 4, length - 1).entries
+        );
   }
 
   return limitedEntries;
